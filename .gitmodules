@@ -1,0 +1,3 @@
+[submodule "AndroidVMTools"]
+	path = AndroidVMTools
+	url = https://github.com/Night-stars-1/AndroidVMTools.git
