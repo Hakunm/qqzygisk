@@ -9,17 +9,17 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "kernelsu": "^1.0.6",
-    "vue": "^3.5.18"
+    "kernelsu": "^3.0.2",
+    "vue": "^3.5.41"
   },
   "devDependencies": {
-    "@vitejs/plugin-vue": "^6.0.1",
+    "@vitejs/plugin-vue": "^6.0.8",
     "@vue/tsconfig": "^0.7.0",
-    "naive-ui": "^2.42.0",
+    "naive-ui": "^2.45.0",
     "typescript": "~5.8.3",
-    "unplugin-auto-import": "^20.0.0",
-    "unplugin-vue-components": "^29.0.0",
-    "vite": "^7.1.2",
-    "vue-tsc": "^3.0.5"
+    "unplugin-auto-import": "^20.3.0",
+    "unplugin-vue-components": "^29.2.0",
+    "vite": "^7.3.6",
+    "vue-tsc": "^3.3.10"
   }
 }

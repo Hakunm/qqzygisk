@@ -1,14 +1,16 @@
 <script setup lang="ts">
 import { getState, toggleState } from "./utils/state";
 
+const err = ref("")
 const qqStatus = ref(false);
 onBeforeMount(async () => {
   qqStatus.value = !await getState();
 })
 const loading = ref(false);
-const qqUpdate = () => {
+const qqUpdate = async () => {
   loading.value = true;
-  toggleState();
+  const result = await toggleState();
+  err.value = result.stderr + "\n" +  result.stdout
   loading.value = false;
 };
 </script>
@@ -32,6 +34,7 @@ const qqUpdate = () => {
         />
       </div>
     </n-card>
+    {{ err }}
   </n-flex>
 </template>
 

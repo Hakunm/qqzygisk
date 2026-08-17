@@ -7,10 +7,12 @@ import com.highcapable.kavaref.KavaRef.Companion.resolve
 import com.qm.qqzygisk.hook.app.base.SettingData
 import com.qm.qqzygisk.hook.app.data.HostData
 import com.qm.qqzygisk.hook.app.data.HostData.toAppClass
+import com.qm.qqzygisk.hook.app.hooker.ChatMenuHooker
 import com.qm.qqzygisk.hook.app.hooker.EmoticonPanelHooker
 import com.qm.qqzygisk.hook.app.hooker.MsgFontHooker
 import com.qm.qqzygisk.hook.app.hooker.SettingHooker
 import com.qm.qqzygisk.hook.app.hooker.StartActivityHooker
+import com.qm.qqzygisk.hook.app.hooker.SystemCameraHooker
 import com.qm.qqzygisk.hook.extension.InstrumentationDelegate
 import com.qm.qqzygisk.hook.extension.hook
 import com.qm.qqzygisk.hook.parasitic.AppParasitics
@@ -42,20 +44,24 @@ object QQEntry {
         onAppLifecycle {
             attachBaseContext { baseContext, _ ->
                 HookSettings.initialize(baseContext)
+                Log.info("hook settings: ${HookSettings.dump(settings)}")
             }
             onCreate {
                 registerModuleAppActivities(proxy = generalSettingActivityClass)
+                ChatMenuHooker.load()
             }
         }
         val hooks = listOf(
+            ChatMenuHooker,
             EmoticonPanelHooker,
             StartActivityHooker,
+            SystemCameraHooker,
             SettingHooker,
             MsgFontHooker
         )
         hooks.forEach { hooker ->
             if (hooker.isShow) settings.add(hooker.toSettingData())
-            hooker.load()
+            if (hooker !== ChatMenuHooker) hooker.load()
         }
         StartActivityHooker.decorators.forEach { hooker ->
             if (hooker.isShow) settings.add(hooker.toSettingData())

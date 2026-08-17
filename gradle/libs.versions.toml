@@ -15,6 +15,8 @@ composeBom = "2025.08.01"
 xposedApi = "82"
 uiToolingPreview = "1.9.0"
 uiTooling = "1.9.0"
+exifinterface = "1.4.2"
+materialComponents = "1.14.0"
 
 [libraries]
 androidvmtools = { module = "io.github.vova7878:AndroidVMTools", version.ref = "androidvmtools" }
@@ -32,10 +34,11 @@ androidx-material3 = { group = "androidx.compose.material3", name = "material3" 
 xposed-api = { module = "de.robv.android.xposed:api", version.ref = "xposedApi" }
 androidx-compose-ui-tooling-preview = { group = "androidx.compose.ui", name = "ui-tooling-preview", version.ref = "uiToolingPreview" }
 androidx-compose-ui-tooling = { group = "androidx.compose.ui", name = "ui-tooling", version.ref = "uiTooling" }
+androidx-exifinterface = { group = "androidx.exifinterface", name = "exifinterface", version.ref = "exifinterface" }
+material-components = { group = "com.google.android.material", name = "material", version.ref = "materialComponents" }
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
 kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
 java-zygisk = { id = "io.github.vova7878.ZygoteLoader", version.ref = "zygisk" }
 lsparanoid = { id = "org.lsposed.lsparanoid", version.ref = "lsparanoid" }
 compose-compiler = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
-

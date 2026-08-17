@@ -35,7 +35,7 @@ android {
         minSdk = 26
         targetSdk = 36
         versionCode = 5
-        versionName = "1.5"
+        versionName = "1.6"
         ndk.abiFilters.addAll(arrayOf("armeabi-v7a", "arm64-v8a"))
     }
 
@@ -195,8 +195,11 @@ fun normalizeShellLineEndings(moduleDir: File) {
         }
 }
 
-tasks.withType<org.gradle.api.tasks.Sync>().configureEach {
+tasks.withType<Sync>().configureEach {
     if (name.startsWith("mergeMagisk")) {
+        from(rootProject.layout.projectDirectory.dir("webroot/dist")) {
+            into("webroot")
+        }
         doLast {
             normalizeShellLineEndings(destinationDir)
         }
@@ -204,6 +207,7 @@ tasks.withType<org.gradle.api.tasks.Sync>().configureEach {
 }
 
 tasks.register("MagiskZipTask") {
+    description = ""
     doLast {
         val zipFile = File(layout.buildDirectory.asFile.get(), "outputs/magisk/release/qqhook.zip")
         val tempDir = Files.createTempDirectory("module_unzip_").toFile()
@@ -224,11 +228,13 @@ afterEvaluate {
 }
 
 dependencies {
+    implementation(libs.androidx.exifinterface)
     implementation(libs.r8.annotations)
     implementation(libs.androidvmtools)
     implementation(libs.kavaref.core)
     implementation(libs.kavaref.extension)
     implementation(libs.browser)
+    implementation(libs.material.components)
 
     implementation(libs.appcompat)
 

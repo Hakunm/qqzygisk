@@ -11,7 +11,7 @@ abstract class BaseSetting {
     abstract val key: String
     abstract val name: String
     open val description: String? = null
-    open val defaultEnabled: Boolean = true
+    open val defaultEnabled: Boolean = false
 
     open val isShow: Boolean = true
 

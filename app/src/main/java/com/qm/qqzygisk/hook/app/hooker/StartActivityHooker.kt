@@ -14,7 +14,10 @@ object StartActivityHooker : BaseHooker() {
     override val name: String = "StartActivityHooker"
     override val isShow: Boolean = false
 
-    val decorators = arrayOf<IStartActivityHookDecorator>(FxxkQQBrowserHooker)
+    val decorators = arrayOf<IStartActivityHookDecorator>(
+        SystemCameraHooker.startActivityDecorator,
+        FxxkQQBrowserHooker,
+    )
 
     override fun initOnce() {
         arrayOf(

@@ -15,8 +15,8 @@ abstract class BaseActivity : ComponentActivity(), ModuleActivity {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         delegate.onCreate(savedInstanceState)
-        super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        super.onCreate(savedInstanceState)
         onCreate()
     }
 
