@@ -11,5 +11,38 @@
         <item name="android:enforceNavigationBarContrast">false</item>
     </style>
 
-    <style name="Theme.QQZygisk.MaterialDialog" parent="Theme.Material3.DayNight.Dialog.Alert" />
+    <style name="Theme.QQZygisk.MaterialDialog" parent="Theme.Material3.DayNight.Dialog.Alert">
+        <item name="colorPrimary">@color/qqz_primary</item>
+        <item name="colorOnPrimary">@color/qqz_on_primary</item>
+        <item name="colorPrimaryContainer">@color/qqz_primary_container</item>
+        <item name="colorOnPrimaryContainer">@color/qqz_on_primary_container</item>
+        <item name="colorSecondary">@color/qqz_secondary</item>
+        <item name="colorOnSecondary">@color/qqz_on_secondary</item>
+        <item name="colorSecondaryContainer">@color/qqz_secondary_container</item>
+        <item name="colorOnSecondaryContainer">@color/qqz_on_secondary_container</item>
+        <item name="colorTertiary">@color/qqz_tertiary</item>
+        <item name="colorOnTertiary">@color/qqz_on_tertiary</item>
+        <item name="colorTertiaryContainer">@color/qqz_tertiary_container</item>
+        <item name="colorOnTertiaryContainer">@color/qqz_on_tertiary_container</item>
+        <item name="android:colorBackground">@color/qqz_background</item>
+        <item name="colorOnBackground">@color/qqz_on_background</item>
+        <item name="colorSurface">@color/qqz_surface</item>
+        <item name="colorOnSurface">@color/qqz_on_surface</item>
+        <item name="colorSurfaceVariant">@color/qqz_surface_variant</item>
+        <item name="colorOnSurfaceVariant">@color/qqz_on_surface_variant</item>
+        <item name="colorSurfaceDim">@color/qqz_surface_dim</item>
+        <item name="colorSurfaceBright">@color/qqz_surface_bright</item>
+        <item name="colorSurfaceContainerLowest">@color/qqz_surface_container_lowest</item>
+        <item name="colorSurfaceContainerLow">@color/qqz_surface_container_low</item>
+        <item name="colorSurfaceContainer">@color/qqz_surface_container</item>
+        <item name="colorSurfaceContainerHigh">@color/qqz_surface_container_high</item>
+        <item name="colorSurfaceContainerHighest">@color/qqz_surface_container_highest</item>
+        <item name="colorOutline">@color/qqz_outline</item>
+        <item name="colorOutlineVariant">@color/qqz_outline_variant</item>
+        <item name="colorError">@color/qqz_error</item>
+        <item name="colorOnError">@color/qqz_on_error</item>
+        <item name="colorErrorContainer">@color/qqz_error_container</item>
+        <item name="colorOnErrorContainer">@color/qqz_on_error_container</item>
+        <item name="android:colorAccent">@color/qqz_primary</item>
+    </style>
 </resources>
