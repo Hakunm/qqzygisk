@@ -48,6 +48,7 @@ class LocalDocumentEmoticonProvider : ExtraEmoticonProvider() {
 
         fun invalidate() {
             lastEmoticonUpdateTime = 0L
+            iconPath = null
         }
 
         private fun updateEmoticons() {
@@ -59,11 +60,7 @@ class LocalDocumentEmoticonProvider : ExtraEmoticonProvider() {
                 .firstConstructor()
             for (file in files) {
                 val filename = file.name
-                if (filename.startsWith("__cover__.")) {
-                    iconPath = file.fullPath
-                    continue
-                }
-                if (filename.endsWith(".nomedia") || filename.endsWith(".txt.jpg")) continue
+                if (!isEmoticonFile(filename)) continue
                 next.add(
                     object : ExtraEmoticon() {
                         val info = infoObj.create()
@@ -76,10 +73,7 @@ class LocalDocumentEmoticonProvider : ExtraEmoticonProvider() {
                 )
             }
             emoticons = next
-            if (iconPath == null) {
-                iconPath = ImageFolderStore.coverFile(File(path))?.absolutePath
-                    ?: files.firstOrNull()?.fullPath
-            }
+            iconPath = resolveIconPath(files)
         }
 
         override fun emoticons(): List<ExtraEmoticon> {
@@ -91,10 +85,24 @@ class LocalDocumentEmoticonProvider : ExtraEmoticonProvider() {
         }
 
         override fun emoticonPanelIconURL(): String? {
-            return if (iconPath != null) "file://$iconPath" else null
+            val cachedPath = iconPath?.takeIf { File(it).isFile }
+            val resolvedPath = cachedPath ?: resolveIconPath(listFile(path)).also {
+                iconPath = it
+            }
+            return resolvedPath?.let { "file://$it" }
         }
 
         override fun uniqueId(): String = id
+
+        private fun resolveIconPath(files: List<FileInfo>): String? =
+            files.firstOrNull { it.name.startsWith("__cover__.") }?.fullPath
+                ?: ImageFolderStore.coverFile(File(path))?.absolutePath
+                ?: files.firstOrNull { isEmoticonFile(it.name) }?.fullPath
+
+        private fun isEmoticonFile(filename: String): Boolean =
+            !filename.startsWith("__cover__.") &&
+                !filename.endsWith(".nomedia") &&
+                !filename.endsWith(".txt.jpg")
     }
 
     private val panelsMap = mutableMapOf<String, Panel>()

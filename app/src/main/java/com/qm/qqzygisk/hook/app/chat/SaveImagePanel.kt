@@ -2,6 +2,7 @@ package com.qm.qqzygisk.hook.app.chat
 
 import android.app.Dialog
 import android.content.Context
+import android.content.DialogInterface
 import android.content.res.Configuration
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
@@ -16,7 +17,6 @@ import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
-import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.HorizontalScrollView
 import android.widget.ImageView
@@ -25,6 +25,10 @@ import android.widget.ProgressBar
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
+import androidx.core.widget.doAfterTextChanged
+import com.google.android.material.dialog.MaterialAlertDialogBuilder
+import com.google.android.material.textfield.TextInputEditText
+import com.google.android.material.textfield.TextInputLayout
 import com.qm.qqzygisk.R
 import com.qm.qqzygisk.hook.utils.ImageDownloader
 import com.qm.qqzygisk.hook.utils.Log
@@ -437,38 +441,58 @@ class SaveImagePanel private constructor(
     }
 
     private fun showCreateFolder() {
-        val input = EditText(context).apply {
-            hint = "文件夹名称"
+        val input = TextInputEditText(context).apply {
             inputType = InputType.TYPE_CLASS_TEXT
-            setTextColor(colors.onSurface)
-            setHintTextColor(colors.muted)
-            background = rounded(colors.preview, context.dp(12).toFloat())
-            setPadding(context.dp(14), context.dp(12), context.dp(14), context.dp(12))
+            isSingleLine = true
         }
-        val box = FrameLayout(context).apply {
-            setPadding(context.dp(20), context.dp(8), context.dp(20), 0)
+        val inputLayout = TextInputLayout(
+            context,
+            null,
+            com.google.android.material.R.attr.textInputOutlinedStyle,
+        ).apply {
+            hint = "文件夹名称"
             addView(
                 input,
+                LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                ),
+            )
+        }
+        val box = FrameLayout(context).apply {
+            setPadding(context.dp(24), context.dp(8), context.dp(24), 0)
+            addView(
+                inputLayout,
                 FrameLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT,
                     ViewGroup.LayoutParams.WRAP_CONTENT,
                 ),
             )
         }
-        android.app.AlertDialog.Builder(context)
+        val dialog = MaterialAlertDialogBuilder(context)
             .setTitle("新建文件夹")
             .setView(box)
             .setNegativeButton("取消", null)
-            .setPositiveButton("创建") { _, _ ->
+            .setPositiveButton("创建", null)
+            .create()
+        input.doAfterTextChanged {
+            inputLayout.error = null
+        }
+        dialog.setOnShowListener {
+            dialog.getButton(DialogInterface.BUTTON_POSITIVE).setOnClickListener {
                 runCatching {
                     selected[0] = ImageFolderStore.createFolder(input.text.toString())
                     bindFolders()
+                    dialog.dismiss()
                 }.onFailure {
                     Log.error("创建保存文件夹失败", it)
-                    Toast.makeText(context, it.message ?: "无法创建文件夹", Toast.LENGTH_SHORT).show()
+                    inputLayout.error = it.message ?: "无法创建文件夹"
                 }
             }
-            .show()
+            input.requestFocus()
+            dialog.window?.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_VISIBLE)
+        }
+        dialog.show()
     }
 
     private fun saveCurrent() {
