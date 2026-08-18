@@ -24,11 +24,7 @@ abstract class ExtraEmoticonProvider {
 data class FileInfo(val name: String, val fullPath: String)
 
 val allowedExtensions = listOf(".png", ".jpg", ".jpeg", ".gif", ".webp")
-val baseDirs = listOf(
-    "/storage/self/primary/Android/media/com.tencent.mobileqq/.fun/Sticker/Storage/",
-    "/storage/self/primary/Android/media/com.tencent.mobileqq/TGStickersExported/v1/",
-    ImageFolderStore.ROOT_PATH,
-)
+val baseDirs = ImageFolderStore.SCAN_ROOTS
 
 fun listDir(directoryPath: String): List<FileInfo> {
     return File(directoryPath).listFiles()?.map { FileInfo(it.name, it.absolutePath) } ?: listOf()

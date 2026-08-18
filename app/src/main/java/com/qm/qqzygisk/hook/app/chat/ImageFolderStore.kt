@@ -6,12 +6,19 @@ import java.util.concurrent.CopyOnWriteArrayList
 /**
  * 聊天长按保存图片的本地目录。
  * 子文件夹会作为表情面板分组，第一张图默认当封面。
+ * 浏览时还会带上模块内置贴纸目录。
  */
 object ImageFolderStore {
     const val ROOT_PATH = "/storage/emulated/0/Android/media/com.tencent.mobileqq/.qqzygisk"
+    val SCAN_ROOTS = listOf(
+        "/storage/self/primary/Android/media/com.tencent.mobileqq/.fun/Sticker/Storage",
+        "/storage/self/primary/Android/media/com.tencent.mobileqq/TGStickersExported/v1",
+        ROOT_PATH,
+    )
     private const val LAST_FOLDER_FILE = ".last_folder"
     private val namePattern = Regex("[\\/:*?\"<>|]")
     private val listeners = CopyOnWriteArrayList<() -> Unit>()
+    private val imageExtensions = setOf("png", "jpg", "jpeg", "gif", "webp")
 
     fun addListener(listener: () -> Unit) {
         listeners.add(listener)
@@ -21,35 +28,42 @@ object ImageFolderStore {
         listeners.forEach { it() }
     }
 
-
     fun root(): File = File(ROOT_PATH).apply { mkdirs() }
 
-    fun folders(): List<File> =
-        root().listFiles()
-            ?.filter { it.isDirectory && !it.name.startsWith(".") }
-            ?.sortedBy { it.name.lowercase() }
-            ?: emptyList()
+    fun isOwned(folder: File): Boolean =
+        folder.absolutePath.startsWith(root().absolutePath + "/")
 
-    private val imageExtensions = setOf("png", "jpg", "jpeg", "gif", "webp")
+    fun folders(includeExternal: Boolean = false): List<File> {
+        val owned = listChildFolders(root())
+        if (!includeExternal) return owned.sortedBy { it.name.lowercase() }
+        val extra = SCAN_ROOTS
+            .filter { it != ROOT_PATH }
+            .flatMap { listChildFolders(File(it)) }
+        return (owned + extra)
+            .distinctBy { it.absolutePath }
+            .sortedBy { it.name.lowercase() }
+    }
 
     fun images(folder: File): List<File> =
         folder.listFiles()
-            ?.filter { it.isFile && it.extension.lowercase() in imageExtensions }
+            ?.filter { it.isFile && isImageFile(it) }
             ?.sortedByDescending { it.lastModified() }
             ?: emptyList()
 
     fun coverFile(folder: File): File? = images(folder).lastOrNull()
 
-    fun lastFolder(): File? {
+    fun lastFolder(includeExternal: Boolean = false): File? {
+        val available = folders(includeExternal)
         val name = File(root(), LAST_FOLDER_FILE)
             .takeIf { it.isFile }
             ?.readText()
             ?.trim()
             .orEmpty()
-        return folders().firstOrNull { it.name == name } ?: folders().firstOrNull()
+        return available.firstOrNull { it.name == name } ?: available.firstOrNull()
     }
 
     fun remember(folder: File) {
+        if (!isOwned(folder)) return
         File(root(), LAST_FOLDER_FILE).writeText(folder.name)
     }
 
@@ -65,12 +79,28 @@ object ImageFolderStore {
     }
 
     fun saveImage(folder: File, bytes: ByteArray, extension: String): File {
+        check(isOwned(folder)) { "只能保存到模块自己的文件夹" }
         ensureFolder(folder)
         val file = File(folder, "img_${System.currentTimeMillis()}.${normalizeExtension(extension)}")
         file.writeBytes(bytes)
         remember(folder)
         notifyChanged()
         return file
+    }
+
+    private fun listChildFolders(dir: File): List<File> =
+        dir.listFiles()
+            ?.filter { it.isDirectory && !it.name.startsWith(".") }
+            .orEmpty()
+            .toList()
+
+    private fun isImageFile(file: File): Boolean {
+        val name = file.name
+        if (name.startsWith(".") || name.startsWith("__cover__.") || name.endsWith(".txt.jpg")) {
+            return false
+        }
+        val ext = file.extension.lowercase()
+        return ext.isEmpty() || ext in imageExtensions
     }
 
     private fun ensureFolder(folder: File) {
@@ -83,6 +113,6 @@ object ImageFolderStore {
 
     private fun normalizeExtension(extension: String): String {
         val ext = extension.lowercase().removePrefix(".")
-        return if (ext in setOf("png", "jpg", "jpeg", "gif", "webp")) ext else "jpg"
+        return if (ext in imageExtensions) ext else "jpg"
     }
 }

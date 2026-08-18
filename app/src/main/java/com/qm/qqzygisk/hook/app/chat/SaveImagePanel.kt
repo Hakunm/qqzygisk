@@ -276,7 +276,7 @@ class SaveImagePanel private constructor(
 
     private fun bindFolders() {
         folderRow.removeAllViews()
-        val folders = ImageFolderStore.folders()
+        val folders = ImageFolderStore.folders(includeExternal = browseOnly)
         if (folders.isEmpty()) {
             selected[0] = null
             folderRow.addView(
@@ -291,7 +291,7 @@ class SaveImagePanel private constructor(
             return
         }
         if (selected[0] == null || folders.none { it.absolutePath == selected[0]?.absolutePath }) {
-            selected[0] = ImageFolderStore.lastFolder() ?: folders.first()
+            selected[0] = ImageFolderStore.lastFolder(includeExternal = browseOnly) ?: folders.first()
         }
         folders.forEach { folder ->
             folderRow.addView(folderCard(folder))
