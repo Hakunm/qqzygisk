@@ -1,6 +1,7 @@
 package com.qm.qqzygisk.hook.app.chat
 
 import java.io.File
+import java.security.MessageDigest
 import java.util.concurrent.CopyOnWriteArrayList
 
 /**
@@ -50,7 +51,11 @@ object ImageFolderStore {
             ?.sortedByDescending { it.lastModified() }
             ?: emptyList()
 
-    fun coverFile(folder: File): File? = images(folder).lastOrNull()
+    fun coverFile(folder: File): File? =
+        folder.listFiles()
+            ?.asSequence()
+            ?.filter { it.isFile && isImageFile(it) }
+            ?.minByOrNull { it.lastModified() }
 
     fun lastFolder(includeExternal: Boolean = false): File? {
         val available = folders(includeExternal)
@@ -81,10 +86,11 @@ object ImageFolderStore {
     fun saveImage(folder: File, bytes: ByteArray, extension: String): File {
         check(isOwned(folder)) { "只能保存到模块自己的文件夹" }
         ensureFolder(folder)
-        val file = File(folder, "img_${System.currentTimeMillis()}.${normalizeExtension(extension)}")
-        file.writeBytes(bytes)
+        val file = File(folder, "${md5(bytes)}.${normalizeExtension(extension)}")
+        val created = !file.exists()
+        if (created) file.writeBytes(bytes)
         remember(folder)
-        notifyChanged()
+        if (created) notifyChanged()
         return file
     }
 
@@ -114,5 +120,17 @@ object ImageFolderStore {
     private fun normalizeExtension(extension: String): String {
         val ext = extension.lowercase().removePrefix(".")
         return if (ext in imageExtensions) ext else "jpg"
+    }
+
+    private fun md5(bytes: ByteArray): String {
+        val digest = MessageDigest.getInstance("MD5").digest(bytes)
+        val hex = "0123456789abcdef"
+        return buildString(digest.size * 2) {
+            digest.forEach { byte ->
+                val value = byte.toInt() and 0xff
+                append(hex[value ushr 4])
+                append(hex[value and 0x0f])
+            }
+        }
     }
 }
