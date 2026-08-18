@@ -6,6 +6,7 @@ import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
+import android.os.Parcelable
 import android.provider.MediaStore
 import android.widget.Toast
 import androidx.core.content.FileProvider
@@ -19,11 +20,9 @@ import com.qm.qqzygisk.hook.extension.hook
 import com.qm.qqzygisk.hook.utils.HookSettings
 import com.qm.qqzygisk.hook.utils.Log
 import java.io.File
+import java.lang.reflect.Constructor
 import java.lang.reflect.Method
-import java.lang.reflect.Modifier
 import java.util.Collections
-import java.util.HashMap
-import java.util.Map
 import java.util.WeakHashMap
 
 object SystemCameraHooker : BaseHooker() {
@@ -34,8 +33,13 @@ object SystemCameraHooker : BaseHooker() {
 
     private const val CAMERA_ACTIVITY =
         "com.tencent.aelight.camera.aebase.QIMCameraCaptureActivity"
-    private const val EDIT_PIC_ACTIVITY =
-        "com.tencent.aelight.camera.aioeditor.takevideo.EditPicActivity"
+
+    // QQ 当前版本里的混淆短名，来自能用的 classes.dex，不是模块自己的变量名。
+    private const val EDITOR_ENTRANCE_CLASS = "ad.a"
+    private const val EDITOR_ENTRANCE_BUILDER_CLASS = "ad.b\$a"
+    private const val EDITOR_JUMP_CLASS = "xc.a"
+    private const val PHOTO_CAPTURE_RESULT_CLASS =
+        "com.tencent.aelight.camera.struct.camera.AEPhotoCaptureResult"
 
     private const val AECAMERA_MODE = "AECAMERA_MODE"
     private const val PHOTO_MODE = 200
@@ -43,16 +47,18 @@ object SystemCameraHooker : BaseHooker() {
     private const val EDITOR_REQUEST_CODE = 1012
 
     private const val DEFAULT_EDIT_VIDEO_TYPE = 10002
+    private const val DEFAULT_TAKE_PHOTO_BUSINESS = 14
+    private const val DEFAULT_CAMERA_PREFER_ID = 2
+    private const val ENTRANCE_SECOND_ARG = 120
     private const val KEY_EDIT_VIDEO_TYPE = "edit_video_type"
-    private const val KEY_BUSINESS_TYPE = "extra.busi_type"
-    private const val KEY_EDIT_FROM = "entry_source"
+    private const val KEY_TAKE_PHOTO_BUSINESS = "take_photo_business"
+    private const val KEY_CAMERA_PREFER_ID = "key_camera_prefer_id"
+    private const val KEY_AIO_CLASS = "ARG_AIO_CLASS"
+    private const val KEY_SESSION_INFO = "ARG_SESSION_INFO"
+    private const val KEY_QQ_SUB_BUSINESS_ID = "qq_sub_business_id"
     private const val PHOTO_SINGLE_PATH = "PhotoConst.SINGLE_PHOTO_PATH"
     private const val INPUT_FULL_SCREEN_MODE = "input_full_screen_mode"
     private const val INPUT_FULL_SCREEN_RESULT = "input_full_screen_mode_result"
-    private const val QCAMERA_PHOTO_FILEPATH = "qcamera_photo_filepath"
-    private const val QCAMERA_ROTATE = "qcamera_rotate"
-    private const val CAMERA_TYPE = "camera_type"
-    private const val EDIT_COME_FROM_NEWFLOW = "PhotoConst.EDIT_COME_FROM_NEWFLOW"
 
     private const val CACHE_DIR = "qqzygisk/system-camera"
     private const val CACHE_MAX_AGE_MS = 24L * 60L * 60L * 1000L
@@ -74,7 +80,10 @@ object SystemCameraHooker : BaseHooker() {
     }
 
     private data class EditorApi(
-        val startEditPicMethod: Method,
+        val entranceClass: Class<*>,
+        val entranceBuilderClass: Class<*>,
+        val photoResultConstructor: Constructor<*>,
+        val jumpToEditorMethod: Method,
     )
 
     private data class BypassSession(
@@ -102,35 +111,101 @@ object SystemCameraHooker : BaseHooker() {
     private fun requireEditorApi(): EditorApi {
         editorApi?.let { return it }
 
-        val editorClass = EDIT_PIC_ACTIVITY.toAppClass()
-        val startEditPicMethod = editorClass.declaredMethods.firstOrNull { method ->
-            isStartEditPicMethod(method)
-        }?.apply { isAccessible = true }
-            ?: error("${editorClass.name}.startEditPic(...) was not found")
+        val entranceClass = EDITOR_ENTRANCE_CLASS.toAppClass()
+        val entranceBuilderClass = EDITOR_ENTRANCE_BUILDER_CLASS.toAppClass()
+        val photoResultClass = PHOTO_CAPTURE_RESULT_CLASS.toAppClass()
+        val intClass = Int::class.javaPrimitiveType!!
+        val photoResultConstructor = photoResultClass.getDeclaredConstructor(
+            intClass,
+            intClass,
+            String::class.java,
+            Bitmap::class.java,
+            Long::class.javaPrimitiveType!!,
+            intClass,
+        ).apply { isAccessible = true }
 
-        return EditorApi(startEditPicMethod).also {
+        val jumpToEditorMethod = EDITOR_JUMP_CLASS.toAppClass().declaredMethods.firstOrNull { method ->
+            method.name == "c" &&
+                method.parameterTypes.size == 5 &&
+                method.parameterTypes[0] == Activity::class.java &&
+                method.parameterTypes[1] == photoResultClass &&
+                method.parameterTypes[2] == entranceClass
+        }?.apply { isAccessible = true }
+            ?: error("$EDITOR_JUMP_CLASS.c(Activity, AEPhotoCaptureResult, entrance, ...) was not found")
+
+        return EditorApi(
+            entranceClass = entranceClass,
+            entranceBuilderClass = entranceBuilderClass,
+            photoResultConstructor = photoResultConstructor,
+            jumpToEditorMethod = jumpToEditorMethod,
+        ).also {
             editorApi = it
-            Log.info("QQ image editor API resolved: ${startEditPicMethod.toGenericString()}")
+            Log.info(
+                "QQ image editor API resolved: result=${photoResultClass.name}, " +
+                    "entrance=${entranceClass.name}, builder=${entranceBuilderClass.name}, " +
+                    "jump=${jumpToEditorMethod.toGenericString()}",
+            )
         }
     }
 
-    /**
-     * The editor method is a public API in current QQ, but its surrounding
-     * classes are obfuscated. Match the stable call shape from QQ's own
-     * AEPituCameraUnit instead of relying on obfuscated helper names.
-     */
-    private fun isStartEditPicMethod(method: Method): Boolean {
-        val parameterTypes = method.parameterTypes
-        return method.name == "startEditPic" &&
-            Modifier.isStatic(method.modifiers) &&
-            Intent::class.java.isAssignableFrom(method.returnType) &&
-            parameterTypes.size == 15 &&
-            Activity::class.java.isAssignableFrom(parameterTypes[0]) &&
-            parameterTypes[1] == String::class.java &&
-            parameterTypes.slice(2..9).all { it == Boolean::class.javaPrimitiveType } &&
-            parameterTypes.slice(10..12).all { it == Int::class.javaPrimitiveType } &&
-            parameterTypes[13] == Boolean::class.javaPrimitiveType &&
-            Map::class.java.isAssignableFrom(parameterTypes[14])
+    private fun buildPhotoResult(api: EditorApi, file: File): Any {
+        return api.photoResultConstructor.newInstance(
+            0,
+            0,
+            file.absolutePath,
+            null,
+            System.currentTimeMillis(),
+            readOrientation(file),
+        )
+    }
+
+    private fun buildEntrance(api: EditorApi, activity: Activity, launchIntent: Intent): Any {
+        val editVideoType = launchIntent.getIntExtra(KEY_EDIT_VIDEO_TYPE, DEFAULT_EDIT_VIDEO_TYPE)
+        val takePhotoBusiness = launchIntent.getIntExtra(
+            KEY_TAKE_PHOTO_BUSINESS,
+            DEFAULT_TAKE_PHOTO_BUSINESS,
+        )
+        val preferId = launchIntent.getIntExtra(KEY_CAMERA_PREFER_ID, DEFAULT_CAMERA_PREFER_ID)
+        val aioClass = launchIntent.getStringExtra(KEY_AIO_CLASS)
+            ?.takeIf { it.isNotEmpty() }
+            ?: activity.javaClass.name
+        @Suppress("DEPRECATION")
+        val sessionInfo = launchIntent.getParcelableExtra<Parcelable>(KEY_SESSION_INFO)
+
+        val entrance = api.entranceClass.getDeclaredConstructor(
+            Int::class.javaPrimitiveType!!,
+            Int::class.javaPrimitiveType!!,
+            Int::class.javaPrimitiveType!!,
+        ).apply { isAccessible = true }
+            .newInstance(editVideoType, ENTRANCE_SECOND_ARG, takePhotoBusiness)
+
+        val builder = api.entranceBuilderClass.getDeclaredConstructor(
+            Int::class.javaPrimitiveType!!,
+        ).apply { isAccessible = true }
+            .newInstance(preferId)
+
+        invokeOneArg(builder, "j", sessionInfo)
+        invokeOneArg(builder, "h", aioClass)
+        invokeOneArg(builder, "i", 1)
+        invokeOneArg(builder, "k", launchIntent.getIntExtra(KEY_QQ_SUB_BUSINESS_ID, 0))
+        invokeOneArg(entrance, "c", invokeNoArg(builder, "g"))
+        return entrance
+    }
+
+    private fun invokeNoArg(target: Any, name: String): Any? {
+        val method = target.javaClass.declaredMethods.firstOrNull { candidate ->
+            candidate.name == name && candidate.parameterTypes.isEmpty()
+        } ?: error("${target.javaClass.name}.$name() was not found")
+        method.isAccessible = true
+        return method.invoke(target)
+    }
+
+    private fun invokeOneArg(target: Any, name: String, value: Any?) {
+        val method = target.javaClass.declaredMethods.firstOrNull { candidate ->
+            candidate.name == name && candidate.parameterTypes.size == 1
+        } ?: error("${target.javaClass.name}.$name(...) was not found")
+        method.isAccessible = true
+        method.invoke(target, value)
     }
 
     private fun bypassQimCameraLaunch(intent: Intent, method: MethodCall): Boolean {
@@ -307,39 +382,18 @@ object SystemCameraHooker : BaseHooker() {
                 )
             }
 
+            val photoResult = buildPhotoResult(session.editorApi, session.outputFile)
+            val entrance = buildEntrance(session.editorApi, activity, session.launchIntent)
             session.phase = BypassPhase.EDITOR
             Log.info("Opening QQ image editor without QIM activity: ${session.outputFile}")
-            val editVideoType = session.launchIntent.getIntExtra(
-                KEY_EDIT_VIDEO_TYPE,
-                DEFAULT_EDIT_VIDEO_TYPE,
-            )
-            val businessType = session.launchIntent.getIntExtra(KEY_BUSINESS_TYPE, 2)
-            val editFrom = session.launchIntent.getIntExtra(KEY_EDIT_FROM, 0)
-            val editorIntent = session.editorApi.startEditPicMethod.invoke(
+            session.editorApi.jumpToEditorMethod.invoke(
                 null,
                 activity,
-                session.outputFile.absolutePath,
-                true,
-                true,
-                true,
-                editVideoType != DEFAULT_EDIT_VIDEO_TYPE,
-                true,
-                false,
-                false,
-                false,
-                businessType,
-                editFrom,
-                0,
-                false,
+                photoResult,
+                entrance,
                 null,
-            ) as? Intent ?: error("startEditPic returned a non-Intent value")
-            editorIntent.putExtra(QCAMERA_PHOTO_FILEPATH, session.outputFile.absolutePath)
-            editorIntent.putExtra(QCAMERA_ROTATE, readOrientation(session.outputFile))
-            editorIntent.putExtra(EDIT_COME_FROM_NEWFLOW, true)
-            editorIntent.putExtra(CAMERA_TYPE, 103)
-            editorIntent.putExtra("go_publish_activity", true)
-            Log.debug("Starting QQ image editor: ${editorIntent.component}")
-            activity.startActivityForResult(editorIntent, EDITOR_REQUEST_CODE)
+                0,
+            )
             true
         }.onFailure {
             bypassSessions.remove(activity)
