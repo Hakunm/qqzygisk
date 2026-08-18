@@ -4,7 +4,7 @@ import { getState, toggleState } from "./utils/state";
 const err = ref("")
 const qqStatus = ref(false);
 onBeforeMount(async () => {
-  qqStatus.value = !await getState();
+  qqStatus.value = await getState();
 })
 const loading = ref(false);
 const qqUpdate = async () => {
