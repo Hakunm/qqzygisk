@@ -6,6 +6,7 @@ import android.widget.RelativeLayout
 import com.highcapable.kavaref.KavaRef.Companion.asResolver
 import com.highcapable.kavaref.KavaRef.Companion.resolve
 import com.qm.qqzygisk.hook.app.base.BaseHooker
+import com.qm.qqzygisk.hook.app.chat.ImageFolderStore
 import com.qm.qqzygisk.hook.app.data.HostData.toAppClass
 import com.qm.qqzygisk.hook.extension.MethodCall
 import com.qm.qqzygisk.hook.extension.hook
@@ -180,7 +181,12 @@ object EmoticonPanelHooker : BaseHooker() {
     }
 
     override fun initOnce() {
-        providers = listOf(LocalDocumentEmoticonProvider())
+        val provider = LocalDocumentEmoticonProvider()
+        providers = listOf(provider)
+        ImageFolderStore.addListener {
+            provider.invalidateCache()
+            lastPanelDataSize = -1
+        }
 
         EmoticonPanelController
             .resolve()

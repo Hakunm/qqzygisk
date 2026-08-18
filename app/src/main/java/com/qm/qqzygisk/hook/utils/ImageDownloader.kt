@@ -16,18 +16,17 @@ object ImageDownloader {
     private const val USER_AGENT =
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36"
 
+    data class DownloadedImage(
+        val bytes: ByteArray,
+        val extension: String,
+    )
+
     fun download(
         urls: List<String>,
         maxBytes: Int = DEFAULT_MAX_BYTES,
         maxSize: Int = DEFAULT_MAX_SIZE,
     ): Bitmap {
-        val failure = IllegalStateException("所有图片请求都失败了")
-        urls.forEach { url ->
-            runCatching { return download(url, maxBytes, maxSize) }
-                .exceptionOrNull()
-                ?.let(failure::addSuppressed)
-        }
-        throw failure
+        return decode(fetch(urls, maxBytes).bytes, maxSize) ?: error("图片数据无法解码")
     }
 
     fun download(
@@ -35,6 +34,26 @@ object ImageDownloader {
         maxBytes: Int = DEFAULT_MAX_BYTES,
         maxSize: Int = DEFAULT_MAX_SIZE,
     ): Bitmap {
+        return decode(fetch(url, maxBytes).bytes, maxSize) ?: error("图片数据无法解码")
+    }
+
+    fun fetch(
+        urls: List<String>,
+        maxBytes: Int = DEFAULT_MAX_BYTES,
+    ): DownloadedImage {
+        val failure = IllegalStateException("所有图片请求都失败了")
+        urls.forEach { url ->
+            runCatching { return fetch(url, maxBytes) }
+                .exceptionOrNull()
+                ?.let(failure::addSuppressed)
+        }
+        throw failure
+    }
+
+    fun fetch(
+        url: String,
+        maxBytes: Int = DEFAULT_MAX_BYTES,
+    ): DownloadedImage {
         val connection = URL(url).openConnection() as HttpURLConnection
         return try {
             connection.connectTimeout = 10_000
@@ -62,7 +81,7 @@ object ImageDownloader {
                 }
                 output.toByteArray()
             }
-            decode(bytes, maxSize) ?: error("图片数据无法解码")
+            DownloadedImage(bytes, extensionOf(url, connection.contentType))
         } finally {
             connection.disconnect()
         }
@@ -88,5 +107,24 @@ object ImageDownloader {
             bytes.size,
             BitmapFactory.Options().apply { inSampleSize = sampleSize },
         )
+    }
+
+    private fun extensionOf(url: String, contentType: String?): String {
+        val mime = contentType?.substringBefore(';')?.trim()?.lowercase()
+        return when (mime) {
+            "image/png" -> "png"
+            "image/gif" -> "gif"
+            "image/webp" -> "webp"
+            "image/jpeg", "image/jpg" -> "jpg"
+            else -> {
+                val path = url.substringBefore('?').lowercase()
+                when {
+                    path.endsWith(".png") -> "png"
+                    path.endsWith(".gif") -> "gif"
+                    path.endsWith(".webp") -> "webp"
+                    else -> "jpg"
+                }
+            }
+        }
     }
 }

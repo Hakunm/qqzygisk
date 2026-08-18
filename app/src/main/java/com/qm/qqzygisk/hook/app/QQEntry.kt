@@ -8,6 +8,7 @@ import com.qm.qqzygisk.hook.app.base.SettingData
 import com.qm.qqzygisk.hook.app.data.HostData
 import com.qm.qqzygisk.hook.app.data.HostData.toAppClass
 import com.qm.qqzygisk.hook.app.hooker.ChatMenuHooker
+import com.qm.qqzygisk.hook.app.hooker.EmoticonButtonHooker
 import com.qm.qqzygisk.hook.app.hooker.EmoticonPanelHooker
 import com.qm.qqzygisk.hook.app.hooker.MsgFontHooker
 import com.qm.qqzygisk.hook.app.hooker.SettingHooker
@@ -53,6 +54,7 @@ object QQEntry {
         }
         val hooks = listOf(
             ChatMenuHooker,
+            EmoticonButtonHooker,
             EmoticonPanelHooker,
             StartActivityHooker,
             SystemCameraHooker,
