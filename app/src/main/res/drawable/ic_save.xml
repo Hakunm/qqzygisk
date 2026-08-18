@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24"
+    android:tint="?android:attr/textColorPrimary">
+    <!-- Material Symbols Outlined download，给宿主菜单着色 -->
+    <path
+        android:fillColor="@android:color/white"
+        android:pathData="M12,16 L7,11 H10 V4 H14 V11 H17 L12,16 Z M5,20 V18 H19 V20 Z" />
+</vector>

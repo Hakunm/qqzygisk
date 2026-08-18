@@ -1,4 +1,4 @@
-package com.qm.qqzygisk.hook.app.hooker
+package com.qm.qqzygisk.hook.app.chat
 
 import com.v7878.dex.DexConstants.ACC_CONSTRUCTOR
 import com.v7878.dex.DexConstants.ACC_FINAL
@@ -19,14 +19,32 @@ import java.lang.reflect.Constructor
 import java.lang.reflect.Method
 import java.util.concurrent.ConcurrentHashMap
 
+/**
+ * 运行时生成 QQ 聊天菜单项子类。
+ *
+ * QQ 长按菜单项是抽象基类，不能直接 new，也不能在模块 APK 里写死继承
+ * （基类名和抽象方法名会随 QQ 版本变化）。这里按当前进程里扫到的
+ * [baseClass] 动态写一份 DEX：覆盖标题、图标、id、点击，点击时执行传入的
+ * [Runnable]。
+ */
 internal object ChatMenuItemFactory {
     private const val GENERATED_CLASS_PREFIX = "com.qm.qqzygisk.generated.ChatMenuItem_"
 
+    /** 每个 QQ 菜单基类只生成一次，后续 [create] 复用同一个构造器。 */
     private val constructors = ConcurrentHashMap<Class<*>, Constructor<*>>()
 
+    /** 判断菜单项是否由本工厂生成，避免 [ChatMenu] 重复插入。 */
     fun isGenerated(item: Any): Boolean =
         item.javaClass.name.startsWith(GENERATED_CLASS_PREFIX)
 
+    /**
+     * @param baseClass QQ 当前版本的菜单项抽象基类
+     * @param message 当前长按的 AIOMsgItem
+     * @param stringMethods 返回标题的无参 String 方法，全部覆盖成 [title]
+     * @param iconMethod 返回图标 resId 的方法；没有图标时为 null
+     * @param idMethod 返回菜单项 id 的方法
+     * @param clickMethod 抽象点击方法，覆盖后转调 [callback]
+     */
     fun create(
         baseClass: Class<*>,
         message: Any,
@@ -58,10 +76,11 @@ internal object ChatMenuItemFactory {
         idMethod: Method,
         clickMethod: Method,
     ): Constructor<*> {
+        // 现网菜单项都是 (AIOMsgItem) 单参构造，其它签名直接拒绝。
         val superConstructor = baseClass.declaredConstructors.singleOrNull {
             it.parameterCount == 1 &&
                 it.parameterTypes[0].name == "com.tencent.mobileqq.aio.msg.AIOMsgItem"
-        } ?: error("Unsupported menu item constructor: ${baseClass.name}")
+        } ?: error("不支持的菜单项构造器: ${baseClass.name}")
 
         val messageType = TypeId.of(superConstructor.parameterTypes[0])
         val stringType = TypeId.of(String::class.java)
@@ -109,6 +128,7 @@ internal object ChatMenuItemFactory {
                         .of(generatedConstructor)
                         .withFlags(ACC_PUBLIC or ACC_CONSTRUCTOR)
                         .withCode(0) { code ->
+                            // <init>(message, title, icon, id, callback)
                             code
                                 .invoke(
                                     DIRECT,
@@ -124,6 +144,7 @@ internal object ChatMenuItemFactory {
                         }
                 }
 
+            // 标题相关 getter 在不同 QQ 版本里可能有多个名字，全部返回同一 title。
             stringMethods.forEach { method ->
                 val methodId = MethodId.of(
                     generatedType,
@@ -166,6 +187,7 @@ internal object ChatMenuItemFactory {
         }
 
         val dexFile = DexFileUtils.openDexFile(DexIO.write(Dex.of(classDef)))
+        // 生成类要挂到 QQ 的 ClassLoader 上，并标成 trusted，才能被宿主菜单框架加载。
         DexFileUtils.setTrusted(dexFile)
         val generatedClass = DexFileUtils.loadClass(
             dexFile,

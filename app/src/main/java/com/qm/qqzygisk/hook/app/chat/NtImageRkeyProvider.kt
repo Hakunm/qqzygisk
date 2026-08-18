@@ -1,4 +1,4 @@
-package com.qm.qqzygisk.hook.app.hooker
+package com.qm.qqzygisk.hook.app.chat
 
 import com.highcapable.kavaref.KavaRef.Companion.resolve
 import com.qm.qqzygisk.hook.app.data.HostData.appClassLoader
@@ -30,7 +30,7 @@ internal object NtImageRkeyProvider {
         val dispatchMethods = handlerClass.resolve().method {
             name = "dispatchRespMsg"
         }
-        check(dispatchMethods.isNotEmpty()) { "MsgRespHandler.dispatchRespMsg not found" }
+        check(dispatchMethods.isNotEmpty()) { "未找到 MsgRespHandler.dispatchRespMsg" }
 
         dispatchMethods.hookAll {
             before {
@@ -38,7 +38,7 @@ internal object NtImageRkeyProvider {
                 runCatching {
                     captureRkeys(responseHolder)
                 }.onFailure {
-                    Log.error("Capture NT image rkeys failed", it)
+                    Log.error("捕获 NT 图片 rkey 失败", it)
                 }
             }
         }
@@ -63,7 +63,7 @@ internal object NtImageRkeyProvider {
         val (newGroupRkey, newPrivateRkey) = parseRkeys(unpackWupBuffer(buffer))
         groupRkey = newGroupRkey
         privateRkey = newPrivateRkey
-        Log.debug("Updated NT image rkeys")
+        Log.debug("已更新 NT 图片 rkey")
     }
 
     private fun findFromServiceMsg(responseHolder: Any): Any? {
@@ -89,22 +89,22 @@ internal object NtImageRkeyProvider {
 
     private fun parseRkeys(buffer: ByteArray): Pair<String, String> {
         val response = lengthDelimitedFields(buffer, 4).firstOrNull()
-            ?: error("NT image rkey response field 4 is missing")
+            ?: error("NT 图片 rkey 响应缺少字段 4")
         val downloadInfo = lengthDelimitedFields(response, 4).firstOrNull()
-            ?: error("NT image rkey download info is missing")
+            ?: error("NT 图片 rkey 缺少下载信息")
         val entries = lengthDelimitedFields(downloadInfo, 1)
-        check(entries.size >= 2) { "NT image rkey entries are missing" }
+        check(entries.size >= 2) { "NT 图片 rkey 条目不足" }
 
         return readRkey(entries[0]) to readRkey(entries[1])
     }
 
     private fun readRkey(entry: ByteArray): String {
         val value = lengthDelimitedFields(entry, 1).firstOrNull()
-            ?: error("NT image rkey value is missing")
+            ?: error("NT 图片 rkey 值为空")
         return value.toString(Charsets.UTF_8)
             .trimEnd('\u0000')
             .takeIf { it.contains("rkey=") }
-            ?: error("Invalid NT image rkey value")
+            ?: error("无效的 NT 图片 rkey")
     }
 
     private fun lengthDelimitedFields(data: ByteArray, fieldNumber: Int): List<ByteArray> {
@@ -113,7 +113,7 @@ internal object NtImageRkeyProvider {
         while (offset < data.size) {
             val tag = readVarint(data, offset)
             offset = tag.nextOffset
-            check(tag.value != 0L) { "Invalid protobuf tag" }
+            check(tag.value != 0L) { "无效的 protobuf tag" }
 
             when ((tag.value and 7).toInt()) {
                 0 -> offset = readVarint(data, offset).nextOffset
@@ -121,7 +121,7 @@ internal object NtImageRkeyProvider {
                 2 -> {
                     val lengthValue = readVarint(data, offset)
                     offset = lengthValue.nextOffset
-                    check(lengthValue.value <= Int.MAX_VALUE) { "Protobuf field is too large" }
+                    check(lengthValue.value <= Int.MAX_VALUE) { "protobuf 字段过大" }
                     val endOffset = checkedOffset(offset, lengthValue.value.toInt(), data.size)
                     if ((tag.value ushr 3).toInt() == fieldNumber) {
                         values += data.copyOfRange(offset, endOffset)
@@ -130,14 +130,14 @@ internal object NtImageRkeyProvider {
                 }
 
                 5 -> offset = checkedOffset(offset, 4, data.size)
-                else -> error("Unsupported protobuf wire type: ${tag.value and 7}")
+                else -> error("不支持的 protobuf wire type: ${tag.value and 7}")
             }
         }
         return values
     }
 
     private fun checkedOffset(offset: Int, byteCount: Int, size: Int): Int {
-        check(byteCount >= 0 && offset <= size - byteCount) { "Truncated protobuf field" }
+        check(byteCount >= 0 && offset <= size - byteCount) { "protobuf 字段被截断" }
         return offset + byteCount
     }
 
@@ -151,7 +151,7 @@ internal object NtImageRkeyProvider {
             if (current and 0x80 == 0) return Varint(value, offset)
             shift += 7
         }
-        error("Invalid protobuf varint")
+        error("无效的 protobuf varint")
     }
 
     private data class Varint(
