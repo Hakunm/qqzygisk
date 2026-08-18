@@ -17,6 +17,8 @@ internal object HookSettings {
 
     private val values = ConcurrentHashMap<String, Boolean>()
     private val defaults = ConcurrentHashMap<String, Boolean>()
+    private val stringValues = ConcurrentHashMap<String, String>()
+    private val stringDefaults = ConcurrentHashMap<String, String>()
 
     @Synchronized
     fun initialize(context: Context) {
@@ -31,10 +33,20 @@ internal object HookSettings {
         preferences = sharedPreferences
         val listener = SharedPreferences.OnSharedPreferenceChangeListener { prefs, key ->
             if (key != null) {
-                defaults[key]?.let { defaultValue ->
-                    values[key] = prefs.getBoolean(key, defaultValue)
-                } ?: prefs.all[key]?.let { value ->
-                    if (value is Boolean) values[key] = value
+                when {
+                    defaults.containsKey(key) -> {
+                        values[key] = prefs.getBoolean(key, defaults.getValue(key))
+                    }
+                    stringDefaults.containsKey(key) -> {
+                        stringValues[key] = prefs.getString(key, stringDefaults.getValue(key))
+                            ?: stringDefaults.getValue(key)
+                    }
+                    else -> prefs.all[key]?.let { value ->
+                        when (value) {
+                            is Boolean -> values[key] = value
+                            is String -> stringValues[key] = value
+                        }
+                    }
                 }
             }
         }
@@ -42,6 +54,9 @@ internal object HookSettings {
         sharedPreferences.registerOnSharedPreferenceChangeListener(listener)
         defaults.forEach { (key, defaultValue) ->
             values[key] = sharedPreferences.getBoolean(key, defaultValue)
+        }
+        stringDefaults.forEach { (key, defaultValue) ->
+            stringValues[key] = sharedPreferences.getString(key, defaultValue) ?: defaultValue
         }
     }
 
@@ -57,6 +72,20 @@ internal object HookSettings {
     fun setEnabled(key: String, enabled: Boolean) {
         values[key] = enabled
         preferences?.edit(commit = true) { putBoolean(key, enabled) }
+    }
+
+    fun getString(key: String, defaultValue: String): String {
+        stringDefaults.putIfAbsent(key, defaultValue)
+        stringValues[key]?.let { return it }
+
+        return preferences?.getString(key, defaultValue)
+            ?.also { stringValues[key] = it }
+            ?: defaultValue
+    }
+
+    fun setString(key: String, value: String) {
+        stringValues[key] = value
+        preferences?.edit(commit = true) { putString(key, value) }
     }
 
     fun dump(settings: Iterable<SettingData>): String {

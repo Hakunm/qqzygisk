@@ -1,5 +1,6 @@
 package com.qm.qqzygisk.hook.app.chat
 
+import com.qm.qqzygisk.hook.utils.HookSettings
 import java.io.File
 import java.security.MessageDigest
 import java.util.concurrent.CopyOnWriteArrayList
@@ -10,12 +11,23 @@ import java.util.concurrent.CopyOnWriteArrayList
  * 浏览时还会带上模块内置贴纸目录。
  */
 object ImageFolderStore {
-    const val ROOT_PATH = "/storage/emulated/0/Android/media/com.tencent.mobileqq/.qqzygisk"
-    val SCAN_ROOTS = listOf(
-        "/storage/self/primary/Android/media/com.tencent.mobileqq/.fun/Sticker/Storage",
-        "/storage/self/primary/Android/media/com.tencent.mobileqq/TGStickersExported/v1",
-        ROOT_PATH,
-    )
+    const val QQ_ZYGISK_PATH_KEY = "qq_zygisk_image_path"
+    const val FUNBOX_PATH_KEY = "funbox_emoticon_path"
+    const val TG_STICKERS_PATH_KEY = "tg_stickers_emoticon_path"
+    const val DEFAULT_QQ_ZYGISK_PATH =
+        "/storage/emulated/0/Android/media/com.tencent.mobileqq/.qqzygisk"
+    const val DEFAULT_FUNBOX_PATH =
+        "/storage/self/primary/Android/media/com.tencent.mobileqq/.fun/Sticker/Storage"
+    const val DEFAULT_TG_STICKERS_PATH =
+        "/storage/self/primary/Android/media/com.tencent.mobileqq/TGStickersExported/v1"
+    val ROOT_PATH: String
+        get() = configuredPath(QQ_ZYGISK_PATH_KEY, DEFAULT_QQ_ZYGISK_PATH)
+    val SCAN_ROOTS: List<String>
+        get() = listOf(
+            configuredPath(FUNBOX_PATH_KEY, DEFAULT_FUNBOX_PATH),
+            configuredPath(TG_STICKERS_PATH_KEY, DEFAULT_TG_STICKERS_PATH),
+            ROOT_PATH,
+        ).distinct()
     private const val LAST_FOLDER_FILE = ".last_folder"
     private val namePattern = Regex("[\\/:*?\"<>|]")
     private val listeners = CopyOnWriteArrayList<() -> Unit>()
@@ -93,6 +105,9 @@ object ImageFolderStore {
         if (created) notifyChanged()
         return file
     }
+
+    private fun configuredPath(key: String, defaultValue: String): String =
+        HookSettings.getString(key, defaultValue).trim().ifEmpty { defaultValue }
 
     private fun listChildFolders(dir: File): List<File> =
         dir.listFiles()

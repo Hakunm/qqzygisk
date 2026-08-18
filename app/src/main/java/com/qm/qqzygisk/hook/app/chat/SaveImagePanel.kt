@@ -41,6 +41,7 @@ import com.qm.qqzygisk.hook.utils.Log
 import com.qm.qqzygisk.hook.utils.injectModuleAppResources
 import java.io.File
 import java.lang.ref.WeakReference
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 
 /**
@@ -70,6 +71,9 @@ class SaveImagePanel private constructor(
     private val thumbnailCache = object : LruCache<String, Bitmap>(THUMBNAIL_CACHE_KB) {
         override fun sizeOf(key: String, value: Bitmap): Int = value.allocationByteCount / 1024
     }
+    private val thumbnailRequests = ConcurrentHashMap.newKeySet<String>()
+    private var thumbnailRefreshPosted = false
+    private var thumbnailRefreshGeneration = 0
     @Volatile
     private var imageGeneration = 0
     @Volatile
@@ -86,6 +90,7 @@ class SaveImagePanel private constructor(
             imageGeneration++
             thumbnailExecutor.shutdownNow()
             folderCoverExecutor.shutdownNow()
+            thumbnailRequests.clear()
             synchronized(thumbnailCache) { thumbnailCache.evictAll() }
             panelDialog = null
         }
@@ -105,7 +110,7 @@ class SaveImagePanel private constructor(
         val root = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
             background = rounded(colors.surface, topRadius = context.dp(24).toFloat())
-            val pad = context.dp(20)
+            val pad = context.dp(PANEL_HORIZONTAL_PADDING)
             setPadding(pad, context.dp(10), pad, context.dp(24))
         }
 
@@ -227,8 +232,11 @@ class SaveImagePanel private constructor(
                         ),
                     )
                 },
-                LinearLayout.LayoutParams(context.dp(56), ViewGroup.LayoutParams.MATCH_PARENT).apply {
-                    marginEnd = context.dp(8)
+                LinearLayout.LayoutParams(
+                    context.dp(FOLDER_COLUMN_WIDTH),
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                ).apply {
+                    marginEnd = context.dp(FOLDER_GRID_GAP)
                 },
             )
             split.addView(
@@ -397,10 +405,17 @@ class SaveImagePanel private constructor(
 
         val fill = fill@{
             if (closed || generation != imageGeneration) return@fill
-            val gap = context.dp(8)
+            val gap = context.dp(IMAGE_GAP)
             val paneWidth = grid.width
                 .takeIf { it > context.dp(120) }
-                ?: (context.resources.displayMetrics.widthPixels - context.dp(104))
+                ?: (
+                    context.resources.displayMetrics.widthPixels -
+                        context.dp(
+                            PANEL_HORIZONTAL_PADDING * 2 +
+                                FOLDER_COLUMN_WIDTH +
+                                FOLDER_GRID_GAP,
+                        )
+                    )
             val cell = ((paneWidth - gap * (IMAGE_COLUMNS - 1)) / IMAGE_COLUMNS)
                 .coerceAtLeast(context.dp(48))
             grid.columnWidth = cell
@@ -452,19 +467,49 @@ class SaveImagePanel private constructor(
             return
         }
         image.setImageDrawable(null)
-        val target = WeakReference(image)
+        val requestKey = "$generation:$key"
+        if (!thumbnailRequests.add(requestKey)) return
         runCatching {
             thumbnailExecutor.execute {
-                if (closed || generation != imageGeneration) return@execute
-                val bitmap = decodeThumb(file, size) ?: return@execute
-                if (closed || generation != imageGeneration) return@execute
-                synchronized(thumbnailCache) { thumbnailCache.put(key, bitmap) }
-                target.get()?.post {
-                    val view = target.get() ?: return@post
-                    if (!closed && generation == imageGeneration && view.tag == key) {
-                        view.setImageBitmap(bitmap)
-                    }
+                try {
+                    if (closed || generation != imageGeneration) return@execute
+                    val bitmap = decodeThumb(file, size) ?: return@execute
+                    if (closed || generation != imageGeneration) return@execute
+                    synchronized(thumbnailCache) { thumbnailCache.put(key, bitmap) }
+                    publishThumbnail(key, bitmap, generation)
+                } finally {
+                    thumbnailRequests.remove(requestKey)
                 }
+            }
+        }.onFailure {
+            thumbnailRequests.remove(requestKey)
+        }
+    }
+
+    private fun publishThumbnail(key: String, bitmap: Bitmap, generation: Int) {
+        val grid = imageGrid ?: return
+        grid.post {
+            if (closed || generation != imageGeneration) return@post
+            var applied = false
+            for (index in 0 until grid.childCount) {
+                val image = grid.getChildAt(index) as? ImageView ?: continue
+                if (image.tag == key) {
+                    image.setImageBitmap(bitmap)
+                    applied = true
+                }
+            }
+            if (!applied) requestThumbnailRefresh(grid, generation)
+        }
+    }
+
+    private fun requestThumbnailRefresh(grid: GridView, generation: Int) {
+        thumbnailRefreshGeneration = generation
+        if (thumbnailRefreshPosted) return
+        thumbnailRefreshPosted = true
+        grid.postOnAnimation {
+            thumbnailRefreshPosted = false
+            if (!closed && thumbnailRefreshGeneration == imageGeneration) {
+                grid.invalidateViews()
             }
         }
     }
@@ -505,7 +550,6 @@ class SaveImagePanel private constructor(
         sendingImage = true
         sender(file)
             .onSuccess {
-                Toast.makeText(context, "已发送", Toast.LENGTH_SHORT).show()
                 panelDialog?.dismiss()
             }
             .onFailure {
@@ -728,6 +772,10 @@ class SaveImagePanel private constructor(
 
     companion object {
         private const val IMAGE_COLUMNS = 5
+        private const val PANEL_HORIZONTAL_PADDING = 12
+        private const val FOLDER_COLUMN_WIDTH = 56
+        private const val FOLDER_GRID_GAP = 6
+        private const val IMAGE_GAP = 4
         private const val THUMBNAIL_CACHE_KB = 16 * 1024
 
         fun show(

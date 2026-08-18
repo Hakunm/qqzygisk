@@ -24,7 +24,6 @@ abstract class ExtraEmoticonProvider {
 data class FileInfo(val name: String, val fullPath: String)
 
 val allowedExtensions = listOf(".png", ".jpg", ".jpeg", ".gif", ".webp")
-val baseDirs = ImageFolderStore.SCAN_ROOTS
 
 fun listDir(directoryPath: String): List<FileInfo> {
     return File(directoryPath).listFiles()?.map { FileInfo(it.name, it.absolutePath) } ?: listOf()
@@ -115,7 +114,7 @@ class LocalDocumentEmoticonProvider : ExtraEmoticonProvider() {
         val panels = mutableListOf<ExtraEmoticonPanel>()
         val seen = mutableSetOf<String>()
         val dirs = mutableListOf<File>()
-        for (baseDir in baseDirs) {
+        for (baseDir in ImageFolderStore.SCAN_ROOTS) {
             File(baseDir).listFiles()?.forEach { dirs.add(it) }
         }
         dirs.addAll(ImageFolderStore.folders())
