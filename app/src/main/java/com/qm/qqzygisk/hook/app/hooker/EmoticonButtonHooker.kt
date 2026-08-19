@@ -7,12 +7,16 @@ import android.widget.ImageButton
 import android.widget.ImageView
 import com.highcapable.kavaref.KavaRef.Companion.resolve
 import com.qm.qqzygisk.hook.app.base.BaseHooker
+import com.qm.qqzygisk.hook.app.chat.ChatImageSender
 import com.qm.qqzygisk.hook.app.chat.SaveImagePanel
 import com.qm.qqzygisk.hook.app.data.HostData.appClassLoader
 import com.qm.qqzygisk.hook.extension.hook
 import com.qm.qqzygisk.hook.extension.hookAll
 import com.qm.qqzygisk.hook.utils.HookSettings
 import com.qm.qqzygisk.hook.utils.Log
+import java.lang.ref.WeakReference
+import java.util.Collections
+import java.util.WeakHashMap
 
 /**
  * 长按 QQ 聊天输入栏表情图标，打开自定义图片面板。
@@ -25,8 +29,14 @@ object EmoticonButtonHooker : BaseHooker() {
 
     private val enabled get() = HookSettings.isEnabled(key, defaultEnabled)
     private const val ATTACHED_TAG = 0x51A1E201
+    private const val AIO_PARAM_CLASS = "com.tencent.aio.data.AIOParam"
+    private val sessionsByView = Collections.synchronizedMap(
+        WeakHashMap<View, WeakReference<Any>>(),
+    )
 
     override fun initOnce() {
+        hookAioParamConstructors()
+
         View::class.resolve()
             .firstMethod {
                 name = "setOnClickListener"
@@ -102,13 +112,14 @@ object EmoticonButtonHooker : BaseHooker() {
     }
 
     private fun scanFields(owner: Any) {
+        val aioParam = ChatImageSender.updateAioParamFrom(owner)
         generateSequence(owner.javaClass) { it.superclass }.forEach { type ->
             type.declaredFields.forEach { field ->
                 if (!View::class.java.isAssignableFrom(field.type)) return@forEach
                 field.isAccessible = true
                 val view = runCatching { field.get(owner) as? View }.getOrNull() ?: return@forEach
-                attachIfChatEmoticonIcon(view)
-                if (resourceName(view) == "emo_btn") forceAttach(view)
+                attachIfChatEmoticonIcon(view, aioParam = aioParam)
+                if (resourceName(view) == "emo_btn") forceAttach(view, aioParam)
             }
         }
     }
@@ -123,12 +134,17 @@ object EmoticonButtonHooker : BaseHooker() {
         }
     }
 
-    private fun forceAttach(view: View) {
+    private fun forceAttach(view: View, aioParam: Any? = null) {
         view.setTag(ATTACHED_TAG, null)
-        attachIfChatEmoticonIcon(view, force = true)
+        attachIfChatEmoticonIcon(view, force = true, aioParam = aioParam)
     }
 
-    private fun attachIfChatEmoticonIcon(view: View, force: Boolean = false) {
+    private fun attachIfChatEmoticonIcon(
+        view: View,
+        force: Boolean = false,
+        aioParam: Any? = null,
+    ) {
+        if (aioParam != null) sessionsByView[view] = WeakReference(aioParam)
         if (view.getTag(ATTACHED_TAG) == true) return
         if (!force && !isChatInputEmoticonIcon(view)) return
         view.setTag(ATTACHED_TAG, true)
@@ -139,7 +155,8 @@ object EmoticonButtonHooker : BaseHooker() {
                 return@setOnLongClickListener false
             }
             runCatching {
-                SaveImagePanel.show(it.context)
+                sessionsByView[it]?.get()?.let(ChatImageSender::updateAioParam)
+                SaveImagePanel.show(it.context, onSendImage = ChatImageSender::send)
             }.onFailure { error ->
                 Log.error("打开图片面板失败", error)
             }
@@ -149,6 +166,24 @@ object EmoticonButtonHooker : BaseHooker() {
             "已挂钩聊天框表情图标: class=${view.javaClass.name} " +
                 "id=${resourceName(view)} desc=${view.contentDescription}",
         )
+    }
+
+    private fun hookAioParamConstructors() {
+        val type = runCatching { Class.forName(AIO_PARAM_CLASS, false, appClassLoader) }
+            .onFailure { Log.warn("未找到 AIOParam，图片面板发送功能不可用", it) }
+            .getOrNull()
+            ?: return
+        runCatching {
+            type.resolve().constructor { }.hookAll {
+                after {
+                    ChatImageSender.updateAioParam(instance)
+                }
+            }
+        }.onSuccess {
+            Log.info("已挂钩 AIOParam，会话图片发送已就绪")
+        }.onFailure {
+            Log.warn("挂钩 AIOParam 失败，将尝试从输入栏组件获取会话", it)
+        }
     }
 
     private fun isChatInputEmoticonIcon(view: View): Boolean {

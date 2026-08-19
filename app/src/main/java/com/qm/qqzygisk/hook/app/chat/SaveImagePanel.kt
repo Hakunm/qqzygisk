@@ -2,33 +2,49 @@ package com.qm.qqzygisk.hook.app.chat
 
 import android.app.Dialog
 import android.content.Context
-import android.content.res.Configuration
+import android.content.DialogInterface
+import android.graphics.Bitmap
 import android.graphics.Color
 import android.graphics.Typeface
+import android.graphics.drawable.BitmapDrawable
+import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
 import android.text.InputType
 import android.text.TextUtils
+import android.util.LruCache
 import android.util.TypedValue
 import android.view.ContextThemeWrapper
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
-import android.widget.EditText
+import android.widget.AbsListView
+import android.widget.BaseAdapter
 import android.widget.FrameLayout
+import android.widget.GridView
 import android.widget.HorizontalScrollView
+import android.widget.ImageButton
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
+import androidx.core.content.ContextCompat
+import androidx.core.graphics.ColorUtils
+import androidx.core.widget.doAfterTextChanged
+import com.google.android.material.dialog.MaterialAlertDialogBuilder
+import com.google.android.material.textfield.TextInputEditText
+import com.google.android.material.textfield.TextInputLayout
 import com.qm.qqzygisk.R
 import com.qm.qqzygisk.hook.utils.AnimatedImageLoader
 import com.qm.qqzygisk.hook.utils.ImageDownloader
 import com.qm.qqzygisk.hook.utils.Log
 import com.qm.qqzygisk.hook.utils.injectModuleAppResources
 import java.io.File
+import java.lang.ref.WeakReference
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.Executors
 
 /**
  * 自定义图片面板：浏览本地文件夹，或从聊天保存图片。
@@ -36,21 +52,50 @@ import java.io.File
 class SaveImagePanel private constructor(
     private val context: Context,
     private val imageUrls: List<String>,
+    private val onSendImage: ((File) -> Result<Unit>)?,
 ) {
     private val colors = PanelColors.from(context)
     private val pending = arrayOfNulls<ImageDownloader.DownloadedImage>(1)
     private val selected = arrayOfNulls<File>(1)
     private lateinit var folderRow: LinearLayout
-    private var imageGrid: LinearLayout? = null
+    private var imageGrid: GridView? = null
     private var emptyHint: TextView? = null
     private var previewView: ImageView? = null
     private var previewProgress: ProgressBar? = null
+    private var panelDialog: Dialog? = null
+    private var sendingImage = false
+    private val thumbnailExecutor = Executors.newFixedThreadPool(2) { task ->
+        Thread(task, "QQZygisk-ImageThumbnail").apply { isDaemon = true }
+    }
+    private val folderCoverExecutor = Executors.newSingleThreadExecutor { task ->
+        Thread(task, "QQZygisk-FolderCover").apply { isDaemon = true }
+    }
+    private val thumbnailCache = object : LruCache<String, Bitmap>(THUMBNAIL_CACHE_KB) {
+        override fun sizeOf(key: String, value: Bitmap): Int = value.allocationByteCount / 1024
+    }
+    private val thumbnailRequests = ConcurrentHashMap.newKeySet<String>()
+    private var thumbnailRefreshPosted = false
+    private var thumbnailRefreshGeneration = 0
+    @Volatile
+    private var imageGeneration = 0
+    @Volatile
+    private var closed = false
     private val browseOnly get() = imageUrls.isEmpty()
 
     fun show() {
         val dialog = Dialog(context, android.R.style.Theme_Translucent_NoTitleBar)
+        panelDialog = dialog
         dialog.setContentView(buildContent(dialog))
         dialog.setCanceledOnTouchOutside(true)
+        dialog.setOnDismissListener {
+            closed = true
+            imageGeneration++
+            thumbnailExecutor.shutdownNow()
+            folderCoverExecutor.shutdownNow()
+            thumbnailRequests.clear()
+            synchronized(thumbnailCache) { thumbnailCache.evictAll() }
+            panelDialog = null
+        }
         dialog.window?.apply {
             setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
             setGravity(Gravity.BOTTOM)
@@ -67,7 +112,7 @@ class SaveImagePanel private constructor(
         val root = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
             background = rounded(colors.surface, topRadius = context.dp(24).toFloat())
-            val pad = context.dp(20)
+            val pad = context.dp(PANEL_HORIZONTAL_PADDING)
             setPadding(pad, context.dp(10), pad, context.dp(24))
         }
 
@@ -81,13 +126,25 @@ class SaveImagePanel private constructor(
             },
         )
 
+        val titleRow = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            addView(
+                TextView(context).apply {
+                    text = if (browseOnly) "图片面板" else "保存图片"
+                    setTextColor(colors.onSurface)
+                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 20f)
+                    typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+                },
+                LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f),
+            )
+            addView(
+                createFolderButton(),
+                LinearLayout.LayoutParams(context.dp(48), context.dp(48)),
+            )
+        }
         root.addView(
-            TextView(context).apply {
-                text = if (browseOnly) "图片面板" else "保存图片"
-                setTextColor(colors.onSurface)
-                setTextSize(TypedValue.COMPLEX_UNIT_SP, 20f)
-                typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
-            },
+            titleRow,
             LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT,
@@ -139,13 +196,19 @@ class SaveImagePanel private constructor(
                 visibility = View.GONE
                 setPadding(0, context.dp(24), 0, context.dp(24))
             }
-            imageGrid = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
+            imageGrid = GridView(context).apply {
+                numColumns = IMAGE_COLUMNS
+                stretchMode = GridView.NO_STRETCH
+                gravity = Gravity.START
+                isVerticalScrollBarEnabled = false
+                clipToPadding = false
+            }
             val gridBox = FrameLayout(context).apply {
                 addView(
                     imageGrid,
                     FrameLayout.LayoutParams(
                         ViewGroup.LayoutParams.MATCH_PARENT,
-                        ViewGroup.LayoutParams.WRAP_CONTENT,
+                        ViewGroup.LayoutParams.MATCH_PARENT,
                     ),
                 )
                 addView(
@@ -171,21 +234,15 @@ class SaveImagePanel private constructor(
                         ),
                     )
                 },
-                LinearLayout.LayoutParams(context.dp(56), ViewGroup.LayoutParams.MATCH_PARENT).apply {
-                    marginEnd = context.dp(8)
+                LinearLayout.LayoutParams(
+                    context.dp(FOLDER_COLUMN_WIDTH),
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                ).apply {
+                    marginEnd = context.dp(FOLDER_GRID_GAP)
                 },
             )
             split.addView(
-                ScrollView(context).apply {
-                    isVerticalScrollBarEnabled = false
-                    addView(
-                        gridBox,
-                        ViewGroup.LayoutParams(
-                            ViewGroup.LayoutParams.MATCH_PARENT,
-                            ViewGroup.LayoutParams.WRAP_CONTENT,
-                        ),
-                    )
-                },
+                gridBox,
                 LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f),
             )
             root.addView(
@@ -194,7 +251,7 @@ class SaveImagePanel private constructor(
                     ViewGroup.LayoutParams.MATCH_PARENT,
                     0,
                     1f,
-                ).apply { bottomMargin = context.dp(16) },
+                ),
             )
         } else {
             root.addView(
@@ -227,33 +284,17 @@ class SaveImagePanel private constructor(
             )
         }
 
-        val actions = LinearLayout(context).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-        }
-        actions.addView(
-            filledButton("新建", colors.secondary, colors.onSecondary) {
-                showCreateFolder()
-            },
-            LinearLayout.LayoutParams(0, context.dp(48), 1f).apply {
-                marginEnd = if (browseOnly) 0 else context.dp(12)
-            },
-        )
         if (!browseOnly) {
-            actions.addView(
+            root.addView(
                 filledButton("保存", colors.primary, colors.onPrimary) {
                     saveCurrent()
                 },
-                LinearLayout.LayoutParams(0, context.dp(48), 1f),
+                LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    context.dp(48),
+                ),
             )
         }
-        root.addView(
-            actions,
-            LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-            ),
-        )
 
         val panelHeight = if (browseOnly) {
             (context.resources.displayMetrics.heightPixels * 0.72f).toInt()
@@ -280,7 +321,7 @@ class SaveImagePanel private constructor(
             selected[0] = null
             folderRow.addView(
                 TextView(context).apply {
-                    text = "还没有文件夹，点新建"
+                    text = "还没有文件夹"
                     setTextColor(colors.muted)
                     setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
                     setPadding(context.dp(4), context.dp(12), context.dp(4), context.dp(12))
@@ -306,19 +347,14 @@ class SaveImagePanel private constructor(
             background = rounded(colors.preview, context.dp(16).toFloat())
             clipToOutline = true
             outlineProvider = roundedOutline(context.dp(16).toFloat())
-            val cover = ImageFolderStore.coverFile(folder)
-            val thumb = cover?.let { AnimatedImageLoader.decode(it, size) }
-            if (thumb != null) {
-                AnimatedImageLoader.bind(this, thumb)
-            } else {
-                setImageResource(R.drawable.ic_save)
-                scaleType = ImageView.ScaleType.CENTER_INSIDE
-                setColorFilter(colors.muted)
-                setPadding(context.dp(14), context.dp(14), context.dp(14), context.dp(14))
-            }
+            setImageResource(R.drawable.ic_save)
+            scaleType = ImageView.ScaleType.CENTER_INSIDE
+            setColorFilter(colors.muted)
+            setPadding(context.dp(14), context.dp(14), context.dp(14), context.dp(14))
         }
+        loadFolderCover(folder, size, image)
         val name = TextView(context).apply {
-            text = folder.name
+            text = ImageFolderStore.displayName(folder)
             setTextColor(if (checked) colors.primary else colors.onSurface)
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
             gravity = Gravity.CENTER
@@ -363,52 +399,190 @@ class SaveImagePanel private constructor(
     private fun bindImages(folder: File?) {
         val grid = imageGrid ?: return
         val hint = emptyHint ?: return
-        grid.removeAllViews()
+        val generation = ++imageGeneration
+        grid.adapter = null
         val files = folder?.let(ImageFolderStore::images).orEmpty()
         hint.visibility = if (files.isEmpty()) View.VISIBLE else View.GONE
         if (files.isEmpty()) return
 
-        val host = (grid.parent as? View) ?: grid
-        val fill = {
-            grid.removeAllViews()
-            val gap = context.dp(8)
-            val columns = 5
-            val paneWidth = listOf(host.width, grid.width)
-                .firstOrNull { it > context.dp(120) }
-                ?: (context.resources.displayMetrics.widthPixels - context.dp(104))
-            val cell = ((paneWidth - gap * (columns - 1)) / columns).coerceAtLeast(context.dp(48))
-            files.chunked(columns).forEach { rowFiles ->
-                val row = LinearLayout(context).apply {
-                    orientation = LinearLayout.HORIZONTAL
-                }
-                rowFiles.forEachIndexed { index, file ->
-                    val thumb = ImageView(context).apply {
-                        scaleType = ImageView.ScaleType.FIT_CENTER
-                        background = rounded(colors.preview, context.dp(12).toFloat())
-                        clipToOutline = true
-                        outlineProvider = roundedOutline(context.dp(12).toFloat())
-                        setPadding(context.dp(4), context.dp(4), context.dp(4), context.dp(4))
-                        AnimatedImageLoader.decode(file, cell)?.let {
-                            AnimatedImageLoader.bind(this, it)
-                        }
-                    }
-                    row.addView(
-                        thumb,
-                        LinearLayout.LayoutParams(cell, cell).apply {
-                            if (index < columns - 1) marginEnd = gap
-                        },
+        val fill = fill@{
+            if (closed || generation != imageGeneration) return@fill
+            val gap = context.dp(IMAGE_GAP)
+            val paneWidth = grid.width
+                .takeIf { it > context.dp(120) }
+                ?: (
+                    context.resources.displayMetrics.widthPixels -
+                        context.dp(
+                            PANEL_HORIZONTAL_PADDING * 2 +
+                                FOLDER_COLUMN_WIDTH +
+                                FOLDER_GRID_GAP,
+                        )
                     )
+            val cell = ((paneWidth - gap * (IMAGE_COLUMNS - 1)) / IMAGE_COLUMNS)
+                .coerceAtLeast(context.dp(48))
+            grid.columnWidth = cell
+            grid.horizontalSpacing = gap
+            grid.verticalSpacing = gap
+            grid.adapter = ImageGridAdapter(files, cell, generation)
+        }
+        if (grid.width > context.dp(120)) fill() else grid.post { fill() }
+    }
+
+    private inner class ImageGridAdapter(
+        private val files: List<File>,
+        private val cellSize: Int,
+        private val generation: Int,
+    ) : BaseAdapter() {
+        override fun getCount(): Int = files.size
+
+        override fun getItem(position: Int): File = files[position]
+
+        override fun getItemId(position: Int): Long = files[position].absolutePath.hashCode().toLong()
+
+        override fun getView(position: Int, convertView: View?, parent: ViewGroup): View {
+            val file = getItem(position)
+            val image = (convertView as? ImageView) ?: ImageView(context).apply {
+                scaleType = ImageView.ScaleType.FIT_CENTER
+                background = rounded(colors.preview, context.dp(12).toFloat())
+                clipToOutline = true
+                outlineProvider = roundedOutline(context.dp(12).toFloat())
+                setPadding(context.dp(4), context.dp(4), context.dp(4), context.dp(4))
+            }
+            image.layoutParams = AbsListView.LayoutParams(cellSize, cellSize)
+            image.contentDescription = "发送 ${file.name}"
+            image.setOnClickListener { sendImage(file) }
+            loadImageThumbnail(file, cellSize, image, generation)
+            return image
+        }
+    }
+
+    private fun loadImageThumbnail(
+        file: File,
+        size: Int,
+        image: ImageView,
+        generation: Int,
+    ) {
+        val key = thumbnailKey(file, size)
+        image.tag = key
+        synchronized(thumbnailCache) { thumbnailCache.get(key) }?.let {
+            AnimatedImageLoader.clear(image)
+            image.setImageBitmap(it)
+            return
+        }
+        AnimatedImageLoader.clear(image)
+        val requestKey = "$generation:$key"
+        if (!thumbnailRequests.add(requestKey)) return
+        runCatching {
+            thumbnailExecutor.execute {
+                try {
+                    if (closed || generation != imageGeneration) return@execute
+                    val drawable = AnimatedImageLoader.decode(file, size) ?: return@execute
+                    if (closed || generation != imageGeneration) return@execute
+                    val bitmap = (drawable as? BitmapDrawable)?.bitmap
+                    if (bitmap != null) {
+                        synchronized(thumbnailCache) { thumbnailCache.put(key, bitmap) }
+                    }
+                    publishThumbnail(key, drawable, bitmap, generation)
+                } finally {
+                    thumbnailRequests.remove(requestKey)
                 }
-                grid.addView(
-                    row,
-                    LinearLayout.LayoutParams(
-                        ViewGroup.LayoutParams.MATCH_PARENT,
-                        ViewGroup.LayoutParams.WRAP_CONTENT,
-                    ).apply { bottomMargin = gap },
-                )
+            }
+        }.onFailure {
+            thumbnailRequests.remove(requestKey)
+        }
+    }
+
+    private fun publishThumbnail(
+        key: String,
+        drawable: Drawable,
+        bitmap: Bitmap?,
+        generation: Int,
+    ) {
+        val grid = imageGrid ?: return
+        grid.post {
+            if (closed || generation != imageGeneration) return@post
+            var applied = false
+            for (index in 0 until grid.childCount) {
+                val image = grid.getChildAt(index) as? ImageView ?: continue
+                if (image.tag == key) {
+                    if (bitmap != null) {
+                        AnimatedImageLoader.clear(image)
+                        image.setImageBitmap(bitmap)
+                    } else {
+                        AnimatedImageLoader.bind(image, drawable)
+                    }
+                    applied = true
+                }
+            }
+            if (!applied) requestThumbnailRefresh(grid, generation)
+        }
+    }
+
+    private fun requestThumbnailRefresh(grid: GridView, generation: Int) {
+        thumbnailRefreshGeneration = generation
+        if (thumbnailRefreshPosted) return
+        thumbnailRefreshPosted = true
+        grid.postOnAnimation {
+            thumbnailRefreshPosted = false
+            if (!closed && thumbnailRefreshGeneration == imageGeneration) {
+                grid.invalidateViews()
             }
         }
-        if (host.width > context.dp(120)) fill() else host.post { fill() }
+    }
+
+    private fun loadFolderCover(folder: File, size: Int, image: ImageView) {
+        val key = "folder:${folder.absolutePath}:$size"
+        image.tag = key
+        val target = WeakReference(image)
+        runCatching {
+            folderCoverExecutor.execute {
+                if (closed) return@execute
+                val cover = ImageFolderStore.coverFile(folder) ?: return@execute
+                val coverKey = thumbnailKey(cover, size)
+                val cachedBitmap = synchronized(thumbnailCache) { thumbnailCache.get(coverKey) }
+                val drawable = if (cachedBitmap == null) {
+                    AnimatedImageLoader.decode(cover, size)
+                } else {
+                    null
+                }
+                val bitmap = cachedBitmap ?: (drawable as? BitmapDrawable)?.bitmap?.also {
+                    synchronized(thumbnailCache) { thumbnailCache.put(coverKey, it) }
+                }
+                if (bitmap == null && drawable == null) return@execute
+                target.get()?.post {
+                    val view = target.get() ?: return@post
+                    if (!closed && view.tag == key) {
+                        view.clearColorFilter()
+                        view.setPadding(0, 0, 0, 0)
+                        view.scaleType = ImageView.ScaleType.CENTER_CROP
+                        if (bitmap != null) {
+                            AnimatedImageLoader.clear(view)
+                            view.setImageBitmap(bitmap)
+                        } else {
+                            AnimatedImageLoader.bind(view, drawable!!)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private fun thumbnailKey(file: File, size: Int): String =
+        "${file.absolutePath}:${file.lastModified()}:${file.length()}:$size"
+
+    private fun sendImage(file: File) {
+        val sender = onSendImage ?: return
+        if (sendingImage) return
+        sendingImage = true
+        sender(file)
+            .onSuccess {
+                panelDialog?.dismiss()
+            }
+            .onFailure {
+                sendingImage = false
+                Log.error("发送表情图片失败: ${file.absolutePath}", it)
+                Toast.makeText(context, it.message ?: "发送失败", Toast.LENGTH_SHORT).show()
+            }
     }
 
     private fun loadPreview() {
@@ -438,38 +612,58 @@ class SaveImagePanel private constructor(
     }
 
     private fun showCreateFolder() {
-        val input = EditText(context).apply {
-            hint = "文件夹名称"
+        val input = TextInputEditText(context).apply {
             inputType = InputType.TYPE_CLASS_TEXT
-            setTextColor(colors.onSurface)
-            setHintTextColor(colors.muted)
-            background = rounded(colors.preview, context.dp(12).toFloat())
-            setPadding(context.dp(14), context.dp(12), context.dp(14), context.dp(12))
+            isSingleLine = true
         }
-        val box = FrameLayout(context).apply {
-            setPadding(context.dp(20), context.dp(8), context.dp(20), 0)
+        val inputLayout = TextInputLayout(
+            context,
+            null,
+            com.google.android.material.R.attr.textInputOutlinedStyle,
+        ).apply {
+            hint = "文件夹名称"
             addView(
                 input,
+                LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                ),
+            )
+        }
+        val box = FrameLayout(context).apply {
+            setPadding(context.dp(24), context.dp(8), context.dp(24), 0)
+            addView(
+                inputLayout,
                 FrameLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT,
                     ViewGroup.LayoutParams.WRAP_CONTENT,
                 ),
             )
         }
-        android.app.AlertDialog.Builder(context)
+        val dialog = MaterialAlertDialogBuilder(context)
             .setTitle("新建文件夹")
             .setView(box)
             .setNegativeButton("取消", null)
-            .setPositiveButton("创建") { _, _ ->
+            .setPositiveButton("创建", null)
+            .create()
+        input.doAfterTextChanged {
+            inputLayout.error = null
+        }
+        dialog.setOnShowListener {
+            dialog.getButton(DialogInterface.BUTTON_POSITIVE).setOnClickListener {
                 runCatching {
                     selected[0] = ImageFolderStore.createFolder(input.text.toString())
                     bindFolders()
+                    dialog.dismiss()
                 }.onFailure {
                     Log.error("创建保存文件夹失败", it)
-                    Toast.makeText(context, it.message ?: "无法创建文件夹", Toast.LENGTH_SHORT).show()
+                    inputLayout.error = it.message ?: "无法创建文件夹"
                 }
             }
-            .show()
+            input.requestFocus()
+            dialog.window?.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_VISIBLE)
+        }
+        dialog.show()
     }
 
     private fun saveCurrent() {
@@ -507,6 +701,25 @@ class SaveImagePanel private constructor(
             typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
             this.background = rounded(background, context.dp(16).toFloat())
             setOnClickListener { onClick() }
+        }
+    }
+
+    private fun createFolderButton(): ImageButton {
+        val selectableBackground = TypedValue().also {
+            context.theme.resolveAttribute(
+                android.R.attr.selectableItemBackgroundBorderless,
+                it,
+                true,
+            )
+        }.resourceId
+        return ImageButton(context).apply {
+            setImageResource(R.drawable.ic_create_folder)
+            setColorFilter(colors.primary)
+            setBackgroundResource(selectableBackground)
+            contentDescription = "新建文件夹"
+            val padding = context.dp(12)
+            setPadding(padding, padding, padding, padding)
+            setOnClickListener { showCreateFolder() }
         }
     }
 
@@ -549,47 +762,45 @@ class SaveImagePanel private constructor(
     ) {
         companion object {
             fun from(context: Context): PanelColors {
-                val night = context.resources.configuration.uiMode and
-                    Configuration.UI_MODE_NIGHT_MASK == Configuration.UI_MODE_NIGHT_YES
-                return if (night) {
-                    PanelColors(
-                        surface = 0xFF1C1412.toInt(),
-                        preview = 0xFF2A211F.toInt(),
-                        selected = 0x332A211F,
-                        primary = 0xFFFFB5A0.toInt(),
-                        onPrimary = 0xFF3F160A.toInt(),
-                        secondary = 0xFF3A2E2B.toInt(),
-                        onSecondary = 0xFFF1DFDA.toInt(),
-                        onSurface = 0xFFF6E8E4.toInt(),
-                        muted = 0xFFC9B4AE.toInt(),
-                        handle = 0x55C9B4AE,
-                    )
-                } else {
-                    PanelColors(
-                        surface = 0xFFFFFBFA.toInt(),
-                        preview = 0xFFF4E8E4.toInt(),
-                        selected = 0x14C06A4E,
-                        primary = 0xFF8F4C38.toInt(),
-                        onPrimary = 0xFFFFFFFF.toInt(),
-                        secondary = 0xFFF0E2DD.toInt(),
-                        onSecondary = 0xFF4A3833.toInt(),
-                        onSurface = 0xFF1F1614.toInt(),
-                        muted = 0xFF7A6863.toInt(),
-                        handle = 0x447A6863,
-                    )
-                }
+                fun color(resourceId: Int) = ContextCompat.getColor(context, resourceId)
+
+                val primary = color(R.color.qqz_primary)
+                val onSurfaceVariant = color(R.color.qqz_on_surface_variant)
+                return PanelColors(
+                    surface = color(R.color.qqz_surface),
+                    preview = color(R.color.qqz_surface_container_high),
+                    selected = ColorUtils.setAlphaComponent(primary, 0x1f),
+                    primary = primary,
+                    onPrimary = color(R.color.qqz_on_primary),
+                    secondary = color(R.color.qqz_secondary_container),
+                    onSecondary = color(R.color.qqz_on_secondary_container),
+                    onSurface = color(R.color.qqz_on_surface),
+                    muted = onSurfaceVariant,
+                    handle = ColorUtils.setAlphaComponent(onSurfaceVariant, 0x55),
+                )
             }
         }
     }
 
     companion object {
-        fun show(host: Context, imageUrls: List<String> = emptyList()) {
+        private const val IMAGE_COLUMNS = 5
+        private const val PANEL_HORIZONTAL_PADDING = 12
+        private const val FOLDER_COLUMN_WIDTH = 56
+        private const val FOLDER_GRID_GAP = 6
+        private const val IMAGE_GAP = 4
+        private const val THUMBNAIL_CACHE_KB = 16 * 1024
+
+        fun show(
+            host: Context,
+            imageUrls: List<String> = emptyList(),
+            onSendImage: ((File) -> Result<Unit>)? = null,
+        ) {
             host.injectModuleAppResources()
             val moduleLoader = SaveImagePanel::class.java.classLoader ?: host.classLoader
             val themed = object : ContextThemeWrapper(host, R.style.Theme_QQZygisk_MaterialDialog) {
                 override fun getClassLoader(): ClassLoader = moduleLoader
             }
-            SaveImagePanel(themed, imageUrls).show()
+            SaveImagePanel(themed, imageUrls, onSendImage).show()
         }
     }
 }
