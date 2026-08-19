@@ -25,7 +25,7 @@ object EmoticonButtonHooker : BaseHooker() {
     override val key = "emoticon_image_panel"
     override val name = "长按表情按钮"
     override val description = "长按聊天框表情图标打开图片面板"
-    override val defaultEnabled = true
+    override val defaultEnabled = false
 
     private val enabled get() = HookSettings.isEnabled(key, defaultEnabled)
     private const val ATTACHED_TAG = 0x51A1E201

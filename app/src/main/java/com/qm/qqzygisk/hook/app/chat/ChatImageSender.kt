@@ -195,7 +195,7 @@ object ChatImageSender {
     private fun createCallback(type: Class<*>, file: File): Any {
         return Proxy.newProxyInstance(type.classLoader ?: appClassLoader, arrayOf(type)) { proxy, method, args ->
             when (method.name) {
-                "toString" -> "QQZygiskImageSendCallback"
+                "toString" -> "ImageSendCallback"
                 "hashCode" -> System.identityHashCode(proxy)
                 "equals" -> proxy === args?.firstOrNull()
                 else -> {
@@ -243,8 +243,7 @@ object ChatImageSender {
         names.asSequence()
             .mapNotNull { findField(target.javaClass, it) }
             .filter { it.type == String::class.java }
-            .mapNotNull { readField(it, target) as? String }
-            .firstOrNull()
+            .firstNotNullOfOrNull { readField(it, target) as? String }
 
     private fun invokeNoArg(target: Any, name: String): Any? {
         val method = generateSequence(target.javaClass) { it.superclass }

@@ -10,11 +10,13 @@ import com.qm.qqzygisk.hook.app.chat.ImageFolderStore
 import com.qm.qqzygisk.hook.app.data.HostData.toAppClass
 import com.qm.qqzygisk.hook.extension.MethodCall
 import com.qm.qqzygisk.hook.extension.hook
+import com.qm.qqzygisk.hook.extension.hookAll
 import com.qm.qqzygisk.hook.utils.HookSettings
 import com.qm.qqzygisk.hook.utils.Log
 import com.qm.qqzygisk.hook.utils.get
 import com.qm.qqzygisk.hook.utils.set
 import org.lsposed.lsparanoid.Obfuscate
+import java.io.File
 import java.net.URL
 import kotlin.properties.Delegates
 
@@ -55,9 +57,7 @@ object EmoticonPanelHooker : BaseHooker() {
                 val panel = provider.extraEmoticonList().find { it.uniqueId() == id.panelId }
                 if(panel != null) {
                     val url = panel.emoticonPanelIconURL()
-                    if (url != null) {
-                        method.result = URL(url)
-                    }
+                    method.result = url?.let(::URL)
                 }
             }
         }
@@ -239,6 +239,17 @@ object EmoticonPanelHooker : BaseHooker() {
             .hook {
                 after {
                     if (enabled) updateBigEmotionContentViewData(this)
+                }
+            }
+
+        FavoriteEmoticonInfo
+            .resolve()
+            .method { name = "send" }
+            .hookAll {
+                after {
+                    if (!enabled) return@after
+                    val path = instance.get<String>("path") ?: return@after
+                    ImageFolderStore.recordUsage(File(path))
                 }
             }
     }

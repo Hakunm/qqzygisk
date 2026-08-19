@@ -31,6 +31,12 @@ object ImageFolderStore {
         ).distinct()
     private const val LAST_FOLDER_FILE = ".last_folder"
     private const val LAST_FOLDER_KEY = "emoticon_panel_last_folder"
+    private const val USAGE_FILE = ".usage.json"
+    const val HISTORY_DIR_NAME = "__history__"
+    private const val HISTORY_LIMIT = 80
+    private val usageLock = Any()
+    @Volatile
+    private var usageCache: UsageStore? = null
     private val namePattern = Regex("[\\/:*?\"<>|]")
     private val listeners = CopyOnWriteArrayList<() -> Unit>()
     private val imageExtensions = setOf("png", "jpg", "jpeg", "gif", "webp")
@@ -50,33 +56,71 @@ object ImageFolderStore {
     fun isOwned(folder: File): Boolean =
         folder.absolutePath.startsWith(root().absolutePath + "/")
 
+    fun historyFolder(): File = File(root(), HISTORY_DIR_NAME)
+
+    fun isHistoryFolder(folder: File): Boolean = folder.name == HISTORY_DIR_NAME
+
     fun folders(includeExternal: Boolean = false): List<File> {
         val owned = listChildFolders(root())
-        if (!includeExternal) return owned.sortedBy { it.name.lowercase() }
-        val extra = SCAN_ROOTS
-            .filter { it != ROOT_PATH }
-            .flatMap { listChildFolders(File(it)) }
-        return (owned + extra)
+        val extra = if (includeExternal) {
+            SCAN_ROOTS
+                .filter { it != ROOT_PATH }
+                .flatMap { listChildFolders(File(it)) }
+        } else {
+            emptyList()
+        }
+        val real = (owned + extra)
             .distinctBy { it.absolutePath }
-            .sortedBy { it.name.lowercase() }
+            .filter { !isHistoryFolder(it) }
+            .sortedWith(
+                compareByDescending<File> { folderUsage(it) }
+                    .thenBy { displayName(it).lowercase() },
+            )
+        return if (includeExternal) listOf(historyFolder()) + real else real
     }
 
-    fun images(folder: File): List<File> =
-        folder.listFiles()
+    fun images(folder: File): List<File> {
+        if (isHistoryFolder(folder)) return historyImages()
+        return folder.listFiles()
             ?.filter { it.isFile && isImageFile(it) }
             ?.sortedByDescending { it.lastModified() }
             ?: emptyList()
+    }
 
-    fun coverFile(folder: File): File? =
-        folder.listFiles()
+    fun coverFile(folder: File): File? {
+        if (isHistoryFolder(folder)) return historyImages().firstOrNull()
+        return folder.listFiles()
             ?.asSequence()
             ?.filter { it.isFile && isImageFile(it) }
             ?.minByOrNull { it.lastModified() }
+    }
 
     fun displayName(folder: File): String {
+        if (isHistoryFolder(folder)) return "历史"
         val storagePath = configuredPath(FUNBOX_PATH_KEY, DEFAULT_FUNBOX_PATH)
         if (folder.parentFile?.absolutePath != File(storagePath).absolutePath) return folder.name
         return funBoxPackNames(storagePath)[folder.name]?.takeIf { it.isNotBlank() } ?: folder.name
+    }
+
+    fun recordUsage(file: File) {
+        if (!file.isFile || !isImageFile(file)) return
+        val now = System.currentTimeMillis()
+        synchronized(usageLock) {
+            val store = loadUsageLocked()
+            bump(store.files, file.absolutePath, now)
+            val parent = file.parentFile
+            if (parent != null && !isHistoryFolder(parent)) {
+                bump(store.folders, parent.absolutePath, now)
+            }
+            saveUsageLocked(store)
+        }
+    }
+
+    fun folderUsage(folder: File): Int {
+        if (isHistoryFolder(folder)) return 0
+        return synchronized(usageLock) {
+            loadUsageLocked().folders[folder.absolutePath]?.count ?: 0
+        }
     }
 
     fun lastFolder(includeExternal: Boolean = false): File? {
@@ -106,7 +150,7 @@ object ImageFolderStore {
 
     fun createFolder(rawName: String): File {
         val name = sanitizeName(rawName)
-        check(name.isNotEmpty()) { "文件夹名无效" }
+        check(name.isNotEmpty() && name != HISTORY_DIR_NAME && name != "历史") { "文件夹名无效" }
         val folder = File(root(), name)
         check(!folder.exists()) { "文件夹已存在: $name" }
         check(folder.mkdirs()) { "无法创建文件夹: $name" }
@@ -126,14 +170,98 @@ object ImageFolderStore {
         return file
     }
 
+    fun deleteImage(file: File) {
+        check(file.isFile && isImageFile(file)) { "不是可删除的表情文件" }
+        check(file.delete()) { "无法删除表情" }
+        synchronized(usageLock) {
+            val store = loadUsageLocked()
+            store.files.remove(file.absolutePath)
+            saveUsageLocked(store)
+        }
+        notifyChanged()
+    }
+
     private fun configuredPath(key: String, defaultValue: String): String =
         HookSettings.getString(key, defaultValue).trim().ifEmpty { defaultValue }
 
     private fun listChildFolders(dir: File): List<File> =
         dir.listFiles()
-            ?.filter { it.isDirectory && !it.name.startsWith(".") }
+            ?.filter { it.isDirectory && !it.name.startsWith(".") && it.name != HISTORY_DIR_NAME }
             .orEmpty()
             .toList()
+
+    private fun historyImages(): List<File> {
+        val entries = synchronized(usageLock) { loadUsageLocked().files.entries.toList() }
+        return entries
+            .sortedWith(
+                compareByDescending<Map.Entry<String, UsageEntry>> { it.value.count }
+                    .thenByDescending { it.value.lastUsed },
+            )
+            .map { File(it.key) }
+            .filter { it.isFile && isImageFile(it) }
+            .take(HISTORY_LIMIT)
+    }
+
+    private fun bump(map: MutableMap<String, UsageEntry>, key: String, now: Long) {
+        val current = map[key]
+        if (current == null) {
+            map[key] = UsageEntry(1, now)
+        } else {
+            current.count += 1
+            current.lastUsed = now
+        }
+    }
+
+    private fun usageFile(): File = File(root(), USAGE_FILE)
+
+    private fun loadUsageLocked(): UsageStore {
+        usageCache?.let { return it }
+        val parsed = runCatching {
+            val raw = usageFile().takeIf { it.isFile }?.readText().orEmpty()
+            if (raw.isBlank()) return@runCatching UsageStore()
+            val json = JSONObject(raw)
+            UsageStore(
+                files = readUsageMap(json.optJSONObject("files")),
+                folders = readUsageMap(json.optJSONObject("folders")),
+            )
+        }.getOrDefault(UsageStore())
+        usageCache = parsed
+        return parsed
+    }
+
+    private fun saveUsageLocked(store: UsageStore) {
+        usageCache = store
+        val json = JSONObject()
+            .put("files", writeUsageMap(store.files))
+            .put("folders", writeUsageMap(store.folders))
+        val file = usageFile()
+        file.parentFile?.mkdirs()
+        file.writeText(json.toString())
+    }
+
+    private fun readUsageMap(obj: JSONObject?): MutableMap<String, UsageEntry> {
+        if (obj == null) return mutableMapOf()
+        val result = mutableMapOf<String, UsageEntry>()
+        obj.keys().forEach { key ->
+            val item = obj.optJSONObject(key) ?: return@forEach
+            result[key] = UsageEntry(
+                count = item.optInt("c"),
+                lastUsed = item.optLong("t"),
+            )
+        }
+        return result
+    }
+
+    private fun writeUsageMap(map: Map<String, UsageEntry>): JSONObject {
+        val obj = JSONObject()
+        map.forEach { (key, entry) ->
+            obj.put(
+                key,
+                JSONObject().put("c", entry.count).put("t", entry.lastUsed),
+            )
+        }
+        return obj
+    }
 
     private fun funBoxPackNames(storagePath: String): Map<String, String> {
         val packsFile = findFunBoxPacksFile(storagePath) ?: return emptyMap()
@@ -211,6 +339,13 @@ object ImageFolderStore {
             }
         }
     }
+
+    private data class UsageEntry(var count: Int, var lastUsed: Long)
+
+    private data class UsageStore(
+        val files: MutableMap<String, UsageEntry> = mutableMapOf(),
+        val folders: MutableMap<String, UsageEntry> = mutableMapOf(),
+    )
 
     private data class FunBoxNameCache(
         val path: String = "",

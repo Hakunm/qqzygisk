@@ -104,7 +104,31 @@ class LocalDocumentEmoticonProvider : ExtraEmoticonProvider() {
                 !filename.endsWith(".txt.jpg")
     }
 
+    private class HistoryPanel : ExtraEmoticonPanel() {
+        override fun uniqueId(): String = ImageFolderStore.HISTORY_DIR_NAME
+
+        override fun emoticons(): List<ExtraEmoticon> {
+            val infoObj = "com.tencent.mobileqq.emoticonview.FavoriteEmoticonInfo"
+                .toAppClass()
+                .resolve()
+                .firstConstructor()
+            return ImageFolderStore.images(ImageFolderStore.historyFolder()).map { file ->
+                object : ExtraEmoticon() {
+                    val info = infoObj.create()
+                    init {
+                        info.set("path", file.absolutePath)
+                        info.set("actionData", "${uniqueId()}:${file.absolutePath}")
+                    }
+                    override fun QQEmoticonObject(): Any = info
+                }
+            }
+        }
+
+        override fun emoticonPanelIconURL(): String? = null
+    }
+
     private val panelsMap = mutableMapOf<String, Panel>()
+    private val historyPanel = HistoryPanel()
 
     fun invalidateCache() {
         panelsMap.values.forEach { it.invalidate() }
@@ -121,6 +145,7 @@ class LocalDocumentEmoticonProvider : ExtraEmoticonProvider() {
         for (dir in dirs) {
             val path = dir.absolutePath
             if (!seen.add(path)) continue
+            if (ImageFolderStore.isHistoryFolder(dir)) continue
             if (!dir.isDirectory || dir.name.startsWith(".")) continue
             val existing = panelsMap[path]
             if (existing != null) {
@@ -133,7 +158,11 @@ class LocalDocumentEmoticonProvider : ExtraEmoticonProvider() {
             panelsMap[path] = panel
             panels.add(panel)
         }
-        return panels
+        val sorted = panels.sortedByDescending { panel ->
+            val path = (panel as? Panel)?.path ?: return@sortedByDescending 0
+            ImageFolderStore.folderUsage(File(path))
+        }
+        return listOf(historyPanel) + sorted
     }
 
     override fun uniqueId(): String = "LocalDocumentEmoticonProvider"

@@ -14,7 +14,7 @@ object EmotionToPicHooker : BaseHooker() {
     override val key = "emotion_to_pic"
     override val name = "以图片方式打开表情"
     override val description = "点击收藏表情时用看图器打开，方便查看和保存"
-    override val defaultEnabled = true
+    override val defaultEnabled = false
 
     private val enabled get() = HookSettings.isEnabled(key, defaultEnabled)
 

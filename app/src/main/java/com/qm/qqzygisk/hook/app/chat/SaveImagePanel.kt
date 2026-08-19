@@ -66,6 +66,7 @@ class SaveImagePanel private constructor(
     private var previewView: ImageView? = null
     private var previewProgress: ProgressBar? = null
     private var panelDialog: Dialog? = null
+    private var previewDialog: Dialog? = null
     private var sendingImage = false
     private var sendType = ChatImageSender.SendType.fromName(
         HookSettings.getString(SEND_TYPE_KEY, ChatImageSender.SendType.IMAGE.name),
@@ -101,6 +102,8 @@ class SaveImagePanel private constructor(
             folderCoverExecutor.shutdownNow()
             thumbnailRequests.clear()
             synchronized(thumbnailCache) { thumbnailCache.evictAll() }
+            previewDialog?.dismiss()
+            previewDialog = null
             panelDialog = null
         }
         dialog.window?.apply {
@@ -146,7 +149,9 @@ class SaveImagePanel private constructor(
             gravity = Gravity.CENTER_VERTICAL
             addView(
                 titleView,
-                LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f),
+                LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+                    marginStart = context.dp(8)
+                },
             )
             if (browseOnly) {
                 addView(
@@ -369,12 +374,20 @@ class SaveImagePanel private constructor(
             background = rounded(colors.preview, context.dp(16).toFloat())
             clipToOutline = true
             outlineProvider = roundedOutline(context.dp(16).toFloat())
-            setImageResource(R.drawable.ic_save)
+            setImageResource(
+                if (ImageFolderStore.isHistoryFolder(folder)) {
+                    R.drawable.ic_history
+                } else {
+                    R.drawable.ic_save
+                },
+            )
             scaleType = ImageView.ScaleType.CENTER_INSIDE
             setColorFilter(colors.muted)
             setPadding(context.dp(14), context.dp(14), context.dp(14), context.dp(14))
         }
-        loadFolderCover(folder, size, image)
+        if (!ImageFolderStore.isHistoryFolder(folder)) {
+            loadFolderCover(folder, size, image)
+        }
         return LinearLayout(context).apply {
             contentDescription = displayName
             orientation = LinearLayout.VERTICAL
@@ -474,7 +487,12 @@ class SaveImagePanel private constructor(
             }
             image.layoutParams = AbsListView.LayoutParams(cellSize, cellSize)
             image.contentDescription = "发送 ${file.name}"
+            image.isLongClickable = true
             image.setOnClickListener { sendImage(file) }
+            image.setOnLongClickListener {
+                showEmoticonPreview(file)
+                true
+            }
             loadImageThumbnail(file, cellSize, image, generation)
             return image
         }
@@ -600,6 +618,7 @@ class SaveImagePanel private constructor(
         sendingImage = true
         sender(file, sendType)
             .onSuccess {
+                ImageFolderStore.recordUsage(file)
                 panelDialog?.dismiss()
             }
             .onFailure {
@@ -607,6 +626,96 @@ class SaveImagePanel private constructor(
                 Log.error("发送${sendType.label}失败: ${file.absolutePath}", it)
                 Toast.makeText(context, it.message ?: "发送失败", Toast.LENGTH_SHORT).show()
             }
+    }
+
+    private fun showEmoticonPreview(file: File) {
+        val preview = ImageView(context).apply {
+            scaleType = ImageView.ScaleType.FIT_CENTER
+            adjustViewBounds = true
+            background = rounded(colors.preview, context.dp(20).toFloat())
+            clipToOutline = true
+            outlineProvider = roundedOutline(context.dp(20).toFloat())
+            minimumHeight = context.dp(200)
+        }
+        val drawable = AnimatedImageLoader.decode(file, maxSize = 720)
+        if (drawable != null) {
+            AnimatedImageLoader.bind(preview, drawable)
+        } else {
+            preview.setImageResource(android.R.drawable.ic_menu_report_image)
+        }
+        val content = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            val pad = context.dp(20)
+            setPadding(pad, context.dp(8), pad, context.dp(24))
+            addView(
+                preview,
+                LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    context.dp(280),
+                ).apply { bottomMargin = context.dp(20) },
+            )
+            addView(
+                filledButton(
+                    "删除",
+                    ContextCompat.getColor(context, R.color.qqz_error),
+                    ContextCompat.getColor(context, R.color.qqz_on_error),
+                ) { confirmDeleteEmoticon(file) },
+                LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    context.dp(48),
+                ),
+            )
+        }
+        previewDialog?.dismiss()
+        previewDialog = MaterialAlertDialogBuilder(context)
+            .setTitle("表情预览")
+            .setView(content)
+            .create()
+            .also { dialog ->
+                dialog.setOnDismissListener {
+                    AnimatedImageLoader.clear(preview)
+                    if (previewDialog === dialog) previewDialog = null
+                }
+                dialog.show()
+            }
+    }
+
+    private fun confirmDeleteEmoticon(file: File) {
+        val message = TextView(context).apply {
+            text = "确定删除这个表情？删除后无法恢复。"
+            setTextColor(colors.onSurface)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
+            setPadding(context.dp(24), context.dp(8), context.dp(24), context.dp(12))
+        }
+        val dialog = MaterialAlertDialogBuilder(context)
+            .setTitle("删除表情")
+            .setView(message)
+            .setNegativeButton("取消", null)
+            .setPositiveButton("删除", null)
+            .create()
+        dialog.setOnShowListener {
+            dialog.window?.setLayout(
+                (context.resources.displayMetrics.widthPixels * 0.86f).toInt()
+                    .coerceAtLeast(context.dp(280)),
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+            )
+            val delete = dialog.getButton(DialogInterface.BUTTON_POSITIVE)
+            delete.setTextColor(ContextCompat.getColor(context, R.color.qqz_error))
+            delete.setOnClickListener {
+                runCatching {
+                    ImageFolderStore.deleteImage(file)
+                }.onSuccess {
+                    dialog.dismiss()
+                    previewDialog?.dismiss()
+                    bindFolders()
+                    Toast.makeText(context, "已删除", Toast.LENGTH_SHORT).show()
+                }.onFailure {
+                    Log.error("删除表情失败: ${file.absolutePath}", it)
+                    Toast.makeText(context, it.message ?: "删除失败", Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+        dialog.show()
     }
 
     private fun createTypeMenuButton(): ImageButton {
@@ -624,6 +733,7 @@ class SaveImagePanel private constructor(
             setBackgroundResource(selectableBackground)
             val padding = context.dp(12)
             setPadding(padding, padding, padding, padding)
+            disableEmptyLongClick()
             setOnClickListener { showSendTypeMenu(it) }
         }
     }
@@ -787,8 +897,15 @@ class SaveImagePanel private constructor(
             contentDescription = "新建文件夹"
             val padding = context.dp(12)
             setPadding(padding, padding, padding, padding)
+            disableEmptyLongClick()
             setOnClickListener { showCreateFolder() }
         }
+    }
+
+    private fun View.disableEmptyLongClick() {
+        isHapticFeedbackEnabled = false
+        isLongClickable = false
+        setOnLongClickListener(null)
     }
 
     private fun rounded(
