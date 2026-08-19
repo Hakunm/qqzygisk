@@ -3,8 +3,6 @@ package com.qm.qqzygisk.hook.app.chat
 import android.app.Dialog
 import android.content.Context
 import android.content.res.Configuration
-import android.graphics.Bitmap
-import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
@@ -26,6 +24,7 @@ import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 import com.qm.qqzygisk.R
+import com.qm.qqzygisk.hook.utils.AnimatedImageLoader
 import com.qm.qqzygisk.hook.utils.ImageDownloader
 import com.qm.qqzygisk.hook.utils.Log
 import com.qm.qqzygisk.hook.utils.injectModuleAppResources
@@ -308,9 +307,9 @@ class SaveImagePanel private constructor(
             clipToOutline = true
             outlineProvider = roundedOutline(context.dp(16).toFloat())
             val cover = ImageFolderStore.coverFile(folder)
-            val thumb = cover?.let { decodeThumb(it, size) }
+            val thumb = cover?.let { AnimatedImageLoader.decode(it, size) }
             if (thumb != null) {
-                setImageBitmap(thumb)
+                AnimatedImageLoader.bind(this, thumb)
             } else {
                 setImageResource(R.drawable.ic_save)
                 scaleType = ImageView.ScaleType.CENTER_INSIDE
@@ -389,7 +388,9 @@ class SaveImagePanel private constructor(
                         clipToOutline = true
                         outlineProvider = roundedOutline(context.dp(12).toFloat())
                         setPadding(context.dp(4), context.dp(4), context.dp(4), context.dp(4))
-                        setImageBitmap(decodeThumb(file, cell))
+                        AnimatedImageLoader.decode(file, cell)?.let {
+                            AnimatedImageLoader.bind(this, it)
+                        }
                     }
                     row.addView(
                         thumb,
@@ -422,10 +423,10 @@ class SaveImagePanel private constructor(
             preview.post {
                 progress.visibility = View.GONE
                 val downloaded = result.getOrNull()
-                val bitmap = downloaded?.let { ImageDownloader.decode(it.bytes, maxSize = 720) }
-                if (bitmap != null) {
+                val drawable = downloaded?.let { AnimatedImageLoader.decode(it.bytes, maxSize = 720) }
+                if (drawable != null) {
                     pending[0] = downloaded
-                    preview.setImageBitmap(bitmap)
+                    AnimatedImageLoader.bind(preview, drawable)
                 } else {
                     preview.setImageResource(android.R.drawable.ic_menu_report_image)
                 }
@@ -508,20 +509,6 @@ class SaveImagePanel private constructor(
             setOnClickListener { onClick() }
         }
     }
-
-    private fun decodeThumb(file: File, sizePx: Int): Bitmap? = runCatching {
-        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-        BitmapFactory.decodeFile(file.absolutePath, bounds)
-        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return@runCatching null
-        var sampleSize = 1
-        while (bounds.outWidth / sampleSize > sizePx || bounds.outHeight / sampleSize > sizePx) {
-            sampleSize *= 2
-        }
-        BitmapFactory.decodeFile(
-            file.absolutePath,
-            BitmapFactory.Options().apply { inSampleSize = sampleSize },
-        )
-    }.getOrNull()
 
     private fun rounded(
         color: Int,

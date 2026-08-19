@@ -32,7 +32,7 @@ android {
 
     defaultConfig {
         applicationId = "com.qm.qqzygisk"
-        minSdk = 26
+        minSdk = 28
         targetSdk = 36
         versionCode = 5
         versionName = "1.6"
