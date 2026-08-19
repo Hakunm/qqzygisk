@@ -40,7 +40,6 @@ import com.google.android.material.textfield.TextInputEditText
 import com.google.android.material.textfield.TextInputLayout
 import com.qm.qqzygisk.R
 import com.qm.qqzygisk.hook.utils.AnimatedImageLoader
-import com.qm.qqzygisk.hook.utils.HookSettings
 import com.qm.qqzygisk.hook.utils.ImageDownloader
 import com.qm.qqzygisk.hook.utils.Log
 import com.qm.qqzygisk.hook.utils.injectModuleAppResources
@@ -49,13 +48,23 @@ import java.lang.ref.WeakReference
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 
+data class ImagePanelAction(
+    val id: String,
+    val label: String,
+    val iconRes: Int,
+    val contentDescription: String = label,
+    val perform: (File) -> Result<Unit>,
+)
+
 /**
  * 自定义图片面板：浏览本地文件夹，或从聊天保存图片。
  */
 class SaveImagePanel private constructor(
     private val context: Context,
     private val imageUrls: List<String>,
-    private val onSendImage: ((File, ChatImageSender.SendType) -> Result<Unit>)?,
+    private val actions: List<ImagePanelAction>,
+    initialActionId: String?,
+    private val onActionSelected: ((String) -> Unit)?,
 ) {
     private val colors = PanelColors.from(context)
     private val pending = arrayOfNulls<ImageDownloader.DownloadedImage>(1)
@@ -68,11 +77,10 @@ class SaveImagePanel private constructor(
     private var previewProgress: ProgressBar? = null
     private var panelDialog: Dialog? = null
     private var previewDialog: Dialog? = null
-    private var sendingImage = false
-    private var sendType = ChatImageSender.SendType.fromName(
-        HookSettings.getString(SEND_TYPE_KEY, ChatImageSender.SendType.IMAGE.name),
-    )
-    private var typeButton: ImageButton? = null
+    private var performingAction = false
+    private var selectedAction = actions.firstOrNull { it.id == initialActionId }
+        ?: actions.firstOrNull()
+    private var actionButton: ImageButton? = null
     private val thumbnailExecutor = Executors.newFixedThreadPool(2) { task ->
         Thread(task, "QQZygisk-ImageThumbnail").apply { isDaemon = true }
     }
@@ -154,9 +162,9 @@ class SaveImagePanel private constructor(
                     marginStart = context.dp(8)
                 },
             )
-            if (browseOnly) {
+            if (browseOnly && actions.size > 1) {
                 addView(
-                    createTypeMenuButton(),
+                    createActionMenuButton(),
                     LinearLayout.LayoutParams(context.dp(48), context.dp(48)),
                 )
             }
@@ -225,7 +233,7 @@ class SaveImagePanel private constructor(
                 isVerticalScrollBarEnabled = false
                 clipToPadding = false
                 onItemClickListener = AdapterView.OnItemClickListener { parent, _, position, _ ->
-                    (parent.adapter.getItem(position) as? File)?.let(::sendImage)
+                    (parent.adapter.getItem(position) as? File)?.let(::performAction)
                 }
                 onItemLongClickListener = AdapterView.OnItemLongClickListener { parent, _, position, _ ->
                     val file = parent.adapter.getItem(position) as? File
@@ -616,19 +624,19 @@ class SaveImagePanel private constructor(
     private fun thumbnailKey(file: File, size: Int): String =
         "${file.absolutePath}:${file.lastModified()}:${file.length()}:$size"
 
-    private fun sendImage(file: File) {
-        val sender = onSendImage ?: return
-        if (sendingImage) return
-        sendingImage = true
-        sender(file, sendType)
+    private fun performAction(file: File) {
+        val action = selectedAction ?: return
+        if (performingAction) return
+        performingAction = true
+        action.perform(file)
             .onSuccess {
                 ImageFolderStore.recordUsage(file)
                 panelDialog?.dismiss()
             }
             .onFailure {
-                sendingImage = false
-                Log.error("发送${sendType.label}失败: ${file.absolutePath}", it)
-                Toast.makeText(context, it.message ?: "发送失败", Toast.LENGTH_SHORT).show()
+                performingAction = false
+                Log.error("${action.label}失败: ${file.absolutePath}", it)
+                Toast.makeText(context, it.message ?: "${action.label}失败", Toast.LENGTH_SHORT).show()
             }
     }
 
@@ -722,7 +730,7 @@ class SaveImagePanel private constructor(
         dialog.show()
     }
 
-    private fun createTypeMenuButton(): ImageButton {
+    private fun createActionMenuButton(): ImageButton {
         val selectableBackground = TypedValue().also {
             context.theme.resolveAttribute(
                 android.R.attr.selectableItemBackgroundBorderless,
@@ -731,36 +739,35 @@ class SaveImagePanel private constructor(
             )
         }.resourceId
         return ImageButton(context).apply {
-            typeButton = this
-            bindSendTypeIcon(this)
+            actionButton = this
+            bindActionIcon(this)
             setColorFilter(colors.primary)
             setBackgroundResource(selectableBackground)
             val padding = context.dp(12)
             setPadding(padding, padding, padding, padding)
             disableEmptyLongClick()
-            setOnClickListener { showSendTypeMenu(it) }
+            setOnClickListener { showActionMenu(it) }
         }
     }
 
-    private fun bindSendTypeIcon(button: ImageButton) {
-        val isEmoticon = sendType == ChatImageSender.SendType.EMOTICON
-        button.setImageResource(
-            if (isEmoticon) R.drawable.ic_send_emoticon else R.drawable.ic_send_image,
-        )
-        button.contentDescription = if (isEmoticon) "发送为表情" else "发送为图片"
+    private fun bindActionIcon(button: ImageButton) {
+        val action = selectedAction ?: return
+        button.setImageResource(action.iconRes)
+        button.contentDescription = action.contentDescription
     }
 
-    private fun showSendTypeMenu(anchor: View) {
+    private fun showActionMenu(anchor: View) {
         PopupMenu(context, anchor).apply {
-            ChatImageSender.SendType.entries.forEachIndexed { index, type ->
-                menu.add(0, index, index, type.label).isChecked = type == sendType
+            actions.forEachIndexed { index, action ->
+                menu.add(0, index, index, action.label).isChecked = action === selectedAction
             }
             menu.setGroupCheckable(0, true, true)
             setOnMenuItemClickListener { item ->
-                val type = ChatImageSender.SendType.entries.getOrNull(item.itemId) ?: return@setOnMenuItemClickListener false
-                sendType = type
-                HookSettings.setString(SEND_TYPE_KEY, type.name)
-                typeButton?.let(::bindSendTypeIcon)
+                val action = actions.getOrNull(item.itemId)
+                    ?: return@setOnMenuItemClickListener false
+                selectedAction = action
+                onActionSelected?.invoke(action.id)
+                actionButton?.let(::bindActionIcon)
                 true
             }
             show()
@@ -978,19 +985,29 @@ class SaveImagePanel private constructor(
         private const val FOLDER_GRID_GAP = 6
         private const val IMAGE_GAP = 4
         private const val THUMBNAIL_CACHE_KB = 16 * 1024
-        private const val SEND_TYPE_KEY = "emoticon_panel_send_type"
 
         fun show(
             host: Context,
             imageUrls: List<String> = emptyList(),
-            onSendImage: ((File, ChatImageSender.SendType) -> Result<Unit>)? = null,
+            actions: List<ImagePanelAction> = emptyList(),
+            initialActionId: String? = null,
+            onActionSelected: ((String) -> Unit)? = null,
         ) {
+            require(actions.map(ImagePanelAction::id).distinct().size == actions.size) {
+                "图片操作 ID 不能重复"
+            }
             host.injectModuleAppResources()
             val moduleLoader = SaveImagePanel::class.java.classLoader ?: host.classLoader
             val themed = object : ContextThemeWrapper(host, R.style.Theme_QQZygisk_MaterialDialog) {
                 override fun getClassLoader(): ClassLoader = moduleLoader
             }
-            SaveImagePanel(themed, imageUrls, onSendImage).show()
+            SaveImagePanel(
+                themed,
+                imageUrls,
+                actions,
+                initialActionId,
+                onActionSelected,
+            ).show()
         }
     }
 }

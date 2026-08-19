@@ -6,8 +6,10 @@ import android.view.ViewGroup
 import android.widget.ImageButton
 import android.widget.ImageView
 import com.highcapable.kavaref.KavaRef.Companion.resolve
+import com.qm.qqzygisk.R
 import com.qm.qqzygisk.hook.app.base.BaseHooker
 import com.qm.qqzygisk.hook.app.chat.ChatImageSender
+import com.qm.qqzygisk.hook.app.chat.ImagePanelAction
 import com.qm.qqzygisk.hook.app.chat.SaveImagePanel
 import com.qm.qqzygisk.hook.app.data.HostData.appClassLoader
 import com.qm.qqzygisk.hook.extension.hook
@@ -28,6 +30,7 @@ object EmoticonButtonHooker : BaseHooker() {
     override val defaultEnabled = false
 
     private val enabled get() = HookSettings.isEnabled(key, defaultEnabled)
+    private const val PANEL_ACTION_KEY = "emoticon_panel_send_type"
     private const val ATTACHED_TAG = 0x51A1E201
     private const val AIO_PARAM_CLASS = "com.tencent.aio.data.AIOParam"
     private val sessionsByView = Collections.synchronizedMap(
@@ -156,7 +159,17 @@ object EmoticonButtonHooker : BaseHooker() {
             }
             runCatching {
                 sessionsByView[it]?.get()?.let(ChatImageSender::updateAioParam)
-                SaveImagePanel.show(it.context, onSendImage = ChatImageSender::sendImage)
+                SaveImagePanel.show(
+                    host = it.context,
+                    actions = panelActions(),
+                    initialActionId = HookSettings.getString(
+                        PANEL_ACTION_KEY,
+                        ChatImageSender.SendType.IMAGE.name,
+                    ),
+                    onActionSelected = { actionId ->
+                        HookSettings.setString(PANEL_ACTION_KEY, actionId)
+                    },
+                )
             }.onFailure { error ->
                 Log.error("打开图片面板失败", error)
             }
@@ -167,6 +180,22 @@ object EmoticonButtonHooker : BaseHooker() {
                 "id=${resourceName(view)} desc=${view.contentDescription}",
         )
     }
+
+    private fun panelActions(): List<ImagePanelAction> =
+        ChatImageSender.SendType.entries.map { type ->
+            val isEmoticon = type == ChatImageSender.SendType.EMOTICON
+            ImagePanelAction(
+                id = type.name,
+                label = type.label,
+                iconRes = if (isEmoticon) {
+                    R.drawable.ic_send_emoticon
+                } else {
+                    R.drawable.ic_send_image
+                },
+                contentDescription = "发送为${type.label}",
+                perform = { file -> ChatImageSender.sendImage(file, type) },
+            )
+        }
 
     private fun hookAioParamConstructors() {
         val type = runCatching { Class.forName(AIO_PARAM_CLASS, false, appClassLoader) }
