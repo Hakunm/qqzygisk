@@ -19,6 +19,7 @@ import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
 import android.widget.AbsListView
+import android.widget.AdapterView
 import android.widget.BaseAdapter
 import android.widget.FrameLayout
 import android.widget.GridView
@@ -223,6 +224,15 @@ class SaveImagePanel private constructor(
                 gravity = Gravity.START
                 isVerticalScrollBarEnabled = false
                 clipToPadding = false
+                onItemClickListener = AdapterView.OnItemClickListener { parent, _, position, _ ->
+                    (parent.adapter.getItem(position) as? File)?.let(::sendImage)
+                }
+                onItemLongClickListener = AdapterView.OnItemLongClickListener { parent, _, position, _ ->
+                    val file = parent.adapter.getItem(position) as? File
+                        ?: return@OnItemLongClickListener false
+                    showEmoticonPreview(file)
+                    true
+                }
             }
             val gridBox = FrameLayout(context).apply {
                 addView(
@@ -487,12 +497,6 @@ class SaveImagePanel private constructor(
             }
             image.layoutParams = AbsListView.LayoutParams(cellSize, cellSize)
             image.contentDescription = "发送 ${file.name}"
-            image.isLongClickable = true
-            image.setOnClickListener { sendImage(file) }
-            image.setOnLongClickListener {
-                showEmoticonPreview(file)
-                true
-            }
             loadImageThumbnail(file, cellSize, image, generation)
             return image
         }
