@@ -156,7 +156,7 @@ object EmoticonButtonHooker : BaseHooker() {
             }
             runCatching {
                 sessionsByView[it]?.get()?.let(ChatImageSender::updateAioParam)
-                SaveImagePanel.show(it.context, onSendImage = ChatImageSender::send)
+                SaveImagePanel.show(it.context, onSendImage = ChatImageSender::sendImage)
             }.onFailure { error ->
                 Log.error("打开图片面板失败", error)
             }

@@ -30,6 +30,7 @@ object ImageFolderStore {
             ROOT_PATH,
         ).distinct()
     private const val LAST_FOLDER_FILE = ".last_folder"
+    private const val LAST_FOLDER_KEY = "emoticon_panel_last_folder"
     private val namePattern = Regex("[\\/:*?\"<>|]")
     private val listeners = CopyOnWriteArrayList<() -> Unit>()
     private val imageExtensions = setOf("png", "jpg", "jpeg", "gif", "webp")
@@ -80,17 +81,27 @@ object ImageFolderStore {
 
     fun lastFolder(includeExternal: Boolean = false): File? {
         val available = folders(includeExternal)
-        val name = File(root(), LAST_FOLDER_FILE)
-            .takeIf { it.isFile }
-            ?.readText()
-            ?.trim()
-            .orEmpty()
-        return available.firstOrNull { it.name == name } ?: available.firstOrNull()
+        val saved = HookSettings.getString(LAST_FOLDER_KEY, "").ifBlank {
+            File(root(), LAST_FOLDER_FILE)
+                .takeIf { it.isFile }
+                ?.readText()
+                ?.trim()
+                .orEmpty()
+        }
+        if (saved.isEmpty()) return available.firstOrNull()
+        return available.firstOrNull { it.absolutePath == saved }
+            ?: available.firstOrNull { it.name == saved }
+            ?: available.firstOrNull()
     }
 
     fun remember(folder: File) {
-        if (!isOwned(folder)) return
-        File(root(), LAST_FOLDER_FILE).writeText(folder.name)
+        HookSettings.setString(LAST_FOLDER_KEY, folder.absolutePath)
+        runCatching {
+            File(root(), LAST_FOLDER_FILE).apply {
+                parentFile?.mkdirs()
+                writeText(folder.absolutePath)
+            }
+        }
     }
 
     fun createFolder(rawName: String): File {

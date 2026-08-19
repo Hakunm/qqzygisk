@@ -10,6 +10,7 @@ import com.qm.qqzygisk.hook.app.data.HostData.toAppClass
 import com.qm.qqzygisk.hook.app.hooker.ChatMenuHooker
 import com.qm.qqzygisk.hook.app.hooker.EmoticonButtonHooker
 import com.qm.qqzygisk.hook.app.hooker.EmoticonPanelHooker
+import com.qm.qqzygisk.hook.app.hooker.EmotionToPicHooker
 import com.qm.qqzygisk.hook.app.hooker.MsgFontHooker
 import com.qm.qqzygisk.hook.app.hooker.SettingHooker
 import com.qm.qqzygisk.hook.app.hooker.StartActivityHooker
@@ -56,6 +57,7 @@ object QQEntry {
             ChatMenuHooker,
             EmoticonButtonHooker,
             EmoticonPanelHooker,
+            EmotionToPicHooker,
             StartActivityHooker,
             SystemCameraHooker,
             SettingHooker,

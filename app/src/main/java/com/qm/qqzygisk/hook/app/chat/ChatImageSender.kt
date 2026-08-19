@@ -12,7 +12,7 @@ import java.util.ArrayList
 import java.util.Collections
 import java.util.IdentityHashMap
 
-/** Sends local images to the QQNT conversation represented by the latest AIOParam. */
+/** Sends local files to the QQNT conversation represented by the latest AIOParam. */
 object ChatImageSender {
     private const val AIO_PARAM_CLASS = "com.tencent.aio.data.AIOParam"
     private const val AIO_SESSION_CLASS = "com.tencent.aio.data.AIOSession"
@@ -20,6 +20,16 @@ object ChatImageSender {
     private const val Q_ROUTE_CLASS = "com.tencent.mobileqq.qroute.QRoute"
     private const val MSG_UTIL_API_CLASS = "com.tencent.qqnt.msg.api.IMsgUtilApi"
     private const val MSG_SERVICE_CLASS = "com.tencent.qqnt.msg.api.IMsgService"
+    enum class SendType(val subType: Int, val summary: String, val label: String) {
+        IMAGE(0, "[图片]", "图片"),
+        EMOTICON(1, "[动画表情]", "表情"),
+        ;
+
+        companion object {
+            fun fromName(raw: String): SendType =
+                entries.firstOrNull { it.name == raw } ?: IMAGE
+        }
+    }
 
     @Volatile
     private var currentAioParam: WeakReference<Any>? = null
@@ -35,14 +45,22 @@ object ChatImageSender {
         currentAioParam = WeakReference(value)
     }
 
-    fun send(file: File): Result<Unit> = runCatching {
+    /** 发送本地文件。默认按普通图片，type 可选表情。 */
+    fun sendImage(file: File, type: SendType = SendType.IMAGE): Result<Unit> = runCatching {
         check(file.isFile && file.canRead()) { "图片文件不可用" }
         val aioParam = currentAioParam?.get() ?: error("没有可用的聊天会话，请重新进入聊天页面")
         val descriptor = extractContact(aioParam)
 
         val msgUtilType = loadClass(MSG_UTIL_API_CLASS)
         val msgUtil = qRouteApi(msgUtilType)
-        val element = createPicElement(msgUtilType, msgUtil, file, descriptor.chatType == 4)
+        val element = createPicElement(
+            msgUtilType,
+            msgUtil,
+            file,
+            isGuild = descriptor.chatType == 4,
+            subType = type.subType,
+        )
+        markPicKind(element, type)
 
         val msgServiceType = loadClass(MSG_SERVICE_CLASS)
         val msgService = qRouteApi(msgServiceType)
@@ -52,7 +70,7 @@ object ChatImageSender {
 
         sendMethod.isAccessible = true
         sendMethod.invoke(msgService, contact, arrayListOf(element), callback)
-        Log.info("已提交聊天图片发送: ${file.absolutePath}")
+        Log.info("已提交聊天${type.label}发送: ${file.absolutePath}")
     }
 
     /** Finds an AIOParam held by a QQ AIO component and makes it the active session. */
@@ -122,6 +140,7 @@ object ChatImageSender {
         api: Any,
         file: File,
         isGuild: Boolean,
+        subType: Int,
     ): Any {
         val preferredName = if (isGuild) "createPicElementForGuild" else "createPicElement"
         val methods = (apiType.methods.asSequence() + api.javaClass.methods.asSequence())
@@ -134,7 +153,7 @@ object ChatImageSender {
             })
             ?: error("QQ 图片消息构造接口不可用")
         method.isAccessible = true
-        return method.invoke(api, file.absolutePath, true, 0)
+        return method.invoke(api, file.absolutePath, true, subType)
             ?: error("QQ 图片消息构造失败")
     }
 
@@ -183,12 +202,26 @@ object ChatImageSender {
                     val resultCode = args?.firstOrNull() as? Number
                     if (resultCode != null && resultCode.toInt() != 0) {
                         val detail = args.getOrNull(1)?.toString().orEmpty()
-                        Log.error("聊天图片发送失败: code=$resultCode message=$detail file=${file.absolutePath}")
+                        Log.error("聊天发送失败: code=$resultCode message=$detail file=${file.absolutePath}")
                     }
                     defaultValue(method.returnType)
                 }
             }
         }
+    }
+
+    private fun markPicKind(element: Any, type: SendType) {
+        val pic = invokeNoArg(element, "getPicElement")
+        if (pic == null) {
+            Log.warn("图片元素缺少 PicElement，已按 createPicElement(subType=${type.subType}) 提交")
+            return
+        }
+        runCatching {
+            invokeOneArg(pic, "setPicSubType", Int::class.javaPrimitiveType!!, type.subType)
+        }.onFailure { Log.warn("设置 picSubType 失败", it) }
+        runCatching {
+            invokeOneArg(pic, "setSummary", String::class.java, type.summary)
+        }.onFailure { Log.warn("设置消息外显文案失败", it) }
     }
 
     private fun qRouteApi(apiType: Class<*>): Any {
@@ -220,6 +253,15 @@ object ChatImageSender {
             ?: return null
         method.isAccessible = true
         return runCatching { method.invoke(target) }.getOrNull()
+    }
+
+    private fun invokeOneArg(target: Any, name: String, argType: Class<*>, arg: Any?) {
+        val method = generateSequence(target.javaClass) { it.superclass }
+            .flatMap { it.declaredMethods.asSequence() }
+            .firstOrNull { it.name == name && it.parameterTypes.contentEquals(arrayOf(argType)) }
+            ?: error("未找到 ${target.javaClass.name}.$name(${argType.simpleName})")
+        method.isAccessible = true
+        method.invoke(target, arg)
     }
 
     private fun findField(type: Class<*>, name: String): Field? =

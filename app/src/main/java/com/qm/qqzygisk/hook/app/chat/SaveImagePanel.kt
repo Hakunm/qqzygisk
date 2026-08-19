@@ -26,6 +26,7 @@ import android.widget.HorizontalScrollView
 import android.widget.ImageButton
 import android.widget.ImageView
 import android.widget.LinearLayout
+import android.widget.PopupMenu
 import android.widget.ProgressBar
 import android.widget.ScrollView
 import android.widget.TextView
@@ -38,6 +39,7 @@ import com.google.android.material.textfield.TextInputEditText
 import com.google.android.material.textfield.TextInputLayout
 import com.qm.qqzygisk.R
 import com.qm.qqzygisk.hook.utils.AnimatedImageLoader
+import com.qm.qqzygisk.hook.utils.HookSettings
 import com.qm.qqzygisk.hook.utils.ImageDownloader
 import com.qm.qqzygisk.hook.utils.Log
 import com.qm.qqzygisk.hook.utils.injectModuleAppResources
@@ -52,11 +54,12 @@ import java.util.concurrent.Executors
 class SaveImagePanel private constructor(
     private val context: Context,
     private val imageUrls: List<String>,
-    private val onSendImage: ((File) -> Result<Unit>)?,
+    private val onSendImage: ((File, ChatImageSender.SendType) -> Result<Unit>)?,
 ) {
     private val colors = PanelColors.from(context)
     private val pending = arrayOfNulls<ImageDownloader.DownloadedImage>(1)
     private val selected = arrayOfNulls<File>(1)
+    private lateinit var titleView: TextView
     private lateinit var folderRow: LinearLayout
     private var imageGrid: GridView? = null
     private var emptyHint: TextView? = null
@@ -64,6 +67,10 @@ class SaveImagePanel private constructor(
     private var previewProgress: ProgressBar? = null
     private var panelDialog: Dialog? = null
     private var sendingImage = false
+    private var sendType = ChatImageSender.SendType.fromName(
+        HookSettings.getString(SEND_TYPE_KEY, ChatImageSender.SendType.IMAGE.name),
+    )
+    private var typeButton: ImageButton? = null
     private val thumbnailExecutor = Executors.newFixedThreadPool(2) { task ->
         Thread(task, "QQZygisk-ImageThumbnail").apply { isDaemon = true }
     }
@@ -126,18 +133,27 @@ class SaveImagePanel private constructor(
             },
         )
 
+        titleView = TextView(context).apply {
+            text = if (browseOnly) "图片面板" else "保存图片"
+            setTextColor(colors.onSurface)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 20f)
+            typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+            maxLines = 1
+            ellipsize = TextUtils.TruncateAt.END
+        }
         val titleRow = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             addView(
-                TextView(context).apply {
-                    text = if (browseOnly) "图片面板" else "保存图片"
-                    setTextColor(colors.onSurface)
-                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 20f)
-                    typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
-                },
+                titleView,
                 LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f),
             )
+            if (browseOnly) {
+                addView(
+                    createTypeMenuButton(),
+                    LinearLayout.LayoutParams(context.dp(48), context.dp(48)),
+                )
+            }
             addView(
                 createFolderButton(),
                 LinearLayout.LayoutParams(context.dp(48), context.dp(48)),
@@ -319,6 +335,7 @@ class SaveImagePanel private constructor(
         val folders = ImageFolderStore.folders(includeExternal = browseOnly)
         if (folders.isEmpty()) {
             selected[0] = null
+            if (browseOnly) titleView.text = "图片面板"
             folderRow.addView(
                 TextView(context).apply {
                     text = "还没有文件夹"
@@ -333,6 +350,9 @@ class SaveImagePanel private constructor(
         if (selected[0] == null || folders.none { it.absolutePath == selected[0]?.absolutePath }) {
             selected[0] = ImageFolderStore.lastFolder(includeExternal = browseOnly) ?: folders.first()
         }
+        if (browseOnly) {
+            titleView.text = selected[0]?.let(ImageFolderStore::displayName) ?: "图片面板"
+        }
         folders.forEach { folder ->
             folderRow.addView(folderCard(folder))
         }
@@ -342,7 +362,9 @@ class SaveImagePanel private constructor(
     private fun folderCard(folder: File): View {
         val checked = folder.absolutePath == selected[0]?.absolutePath
         val size = if (browseOnly) context.dp(40) else context.dp(56)
+        val displayName = ImageFolderStore.displayName(folder)
         val image = ImageView(context).apply {
+            contentDescription = displayName
             scaleType = ImageView.ScaleType.CENTER_CROP
             background = rounded(colors.preview, context.dp(16).toFloat())
             clipToOutline = true
@@ -353,15 +375,8 @@ class SaveImagePanel private constructor(
             setPadding(context.dp(14), context.dp(14), context.dp(14), context.dp(14))
         }
         loadFolderCover(folder, size, image)
-        val name = TextView(context).apply {
-            text = ImageFolderStore.displayName(folder)
-            setTextColor(if (checked) colors.primary else colors.onSurface)
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
-            gravity = Gravity.CENTER
-            maxLines = 1
-            ellipsize = TextUtils.TruncateAt.END
-        }
         return LinearLayout(context).apply {
+            contentDescription = displayName
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER_HORIZONTAL
             background = if (checked) {
@@ -373,15 +388,24 @@ class SaveImagePanel private constructor(
             val padV = context.dp(6)
             setPadding(padH, padV, padH, padV)
             addView(image, LinearLayout.LayoutParams(size, size))
-            addView(
-                name,
-                LinearLayout.LayoutParams(
-                    if (browseOnly) ViewGroup.LayoutParams.MATCH_PARENT else size + context.dp(8),
-                    ViewGroup.LayoutParams.WRAP_CONTENT,
-                ).apply {
-                    topMargin = context.dp(6)
-                },
-            )
+            if (!browseOnly) {
+                addView(
+                    TextView(context).apply {
+                        text = displayName
+                        setTextColor(if (checked) colors.primary else colors.onSurface)
+                        setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+                        gravity = Gravity.CENTER
+                        maxLines = 1
+                        ellipsize = TextUtils.TruncateAt.END
+                    },
+                    LinearLayout.LayoutParams(
+                        size + context.dp(8),
+                        ViewGroup.LayoutParams.WRAP_CONTENT,
+                    ).apply {
+                        topMargin = context.dp(6)
+                    },
+                )
+            }
             if (browseOnly) {
                 layoutParams = LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT,
@@ -574,15 +598,59 @@ class SaveImagePanel private constructor(
         val sender = onSendImage ?: return
         if (sendingImage) return
         sendingImage = true
-        sender(file)
+        sender(file, sendType)
             .onSuccess {
                 panelDialog?.dismiss()
             }
             .onFailure {
                 sendingImage = false
-                Log.error("发送表情图片失败: ${file.absolutePath}", it)
+                Log.error("发送${sendType.label}失败: ${file.absolutePath}", it)
                 Toast.makeText(context, it.message ?: "发送失败", Toast.LENGTH_SHORT).show()
             }
+    }
+
+    private fun createTypeMenuButton(): ImageButton {
+        val selectableBackground = TypedValue().also {
+            context.theme.resolveAttribute(
+                android.R.attr.selectableItemBackgroundBorderless,
+                it,
+                true,
+            )
+        }.resourceId
+        return ImageButton(context).apply {
+            typeButton = this
+            bindSendTypeIcon(this)
+            setColorFilter(colors.primary)
+            setBackgroundResource(selectableBackground)
+            val padding = context.dp(12)
+            setPadding(padding, padding, padding, padding)
+            setOnClickListener { showSendTypeMenu(it) }
+        }
+    }
+
+    private fun bindSendTypeIcon(button: ImageButton) {
+        val isEmoticon = sendType == ChatImageSender.SendType.EMOTICON
+        button.setImageResource(
+            if (isEmoticon) R.drawable.ic_send_emoticon else R.drawable.ic_send_image,
+        )
+        button.contentDescription = if (isEmoticon) "发送为表情" else "发送为图片"
+    }
+
+    private fun showSendTypeMenu(anchor: View) {
+        PopupMenu(context, anchor).apply {
+            ChatImageSender.SendType.entries.forEachIndexed { index, type ->
+                menu.add(0, index, index, type.label).isChecked = type == sendType
+            }
+            menu.setGroupCheckable(0, true, true)
+            setOnMenuItemClickListener { item ->
+                val type = ChatImageSender.SendType.entries.getOrNull(item.itemId) ?: return@setOnMenuItemClickListener false
+                sendType = type
+                HookSettings.setString(SEND_TYPE_KEY, type.name)
+                typeButton?.let(::bindSendTypeIcon)
+                true
+            }
+            show()
+        }
     }
 
     private fun loadPreview() {
@@ -789,11 +857,12 @@ class SaveImagePanel private constructor(
         private const val FOLDER_GRID_GAP = 6
         private const val IMAGE_GAP = 4
         private const val THUMBNAIL_CACHE_KB = 16 * 1024
+        private const val SEND_TYPE_KEY = "emoticon_panel_send_type"
 
         fun show(
             host: Context,
             imageUrls: List<String> = emptyList(),
-            onSendImage: ((File) -> Result<Unit>)? = null,
+            onSendImage: ((File, ChatImageSender.SendType) -> Result<Unit>)? = null,
         ) {
             host.injectModuleAppResources()
             val moduleLoader = SaveImagePanel::class.java.classLoader ?: host.classLoader
