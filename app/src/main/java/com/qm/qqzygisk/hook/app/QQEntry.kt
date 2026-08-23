@@ -7,6 +7,7 @@ import com.highcapable.kavaref.KavaRef.Companion.resolve
 import com.qm.qqzygisk.hook.app.base.SettingData
 import com.qm.qqzygisk.hook.app.data.HostData
 import com.qm.qqzygisk.hook.app.data.HostData.toAppClass
+import com.qm.qqzygisk.hook.app.chat.NtImageRkeyProvider
 import com.qm.qqzygisk.hook.app.hooker.ChatMenuHooker
 import com.qm.qqzygisk.hook.app.hooker.EmoticonButtonHooker
 import com.qm.qqzygisk.hook.app.hooker.EmoticonPanelHooker
@@ -27,10 +28,15 @@ import com.qm.qqzygisk.hook.utils.registerModuleAppActivities
 object QQEntry {
     val settings = mutableSetOf<SettingData>()
 
-    fun init(loader: ClassLoader, packageName: String) {
+    fun init(
+        loader: ClassLoader,
+        packageName: String,
+    ) {
         settings.clear()
         HostData.init(loader)
         Log.info("running on: ${HostData.toVerStr()}")
+        runCatching { NtImageRkeyProvider.installHook() }
+            .onFailure { Log.error("安装 NT 图片 rkey hook 失败", it) }
         val generalSettingActivityClass = "com.tencent.mobileqq.activity.photo.CameraPreviewActivity".toAppClass()
         val hookedInstrumentationClass = "com.tencent.biz.richframework.hook.instrumentation.HookedInstrumentation".toAppClass()
         hookedInstrumentationClass
@@ -42,7 +48,6 @@ object QQEntry {
                 }
             }
 
-
         onAppLifecycle {
             attachBaseContext { baseContext, _ ->
                 HookSettings.initialize(baseContext)
@@ -53,16 +58,17 @@ object QQEntry {
                 ChatMenuHooker.load()
             }
         }
-        val hooks = listOf(
-            ChatMenuHooker,
-            EmoticonButtonHooker,
-            EmoticonPanelHooker,
-            EmotionToPicHooker,
-            StartActivityHooker,
-            SystemCameraHooker,
-            SettingHooker,
-            MsgFontHooker
-        )
+        val hooks =
+            listOf(
+                ChatMenuHooker,
+                EmoticonButtonHooker,
+                EmoticonPanelHooker,
+                EmotionToPicHooker,
+                StartActivityHooker,
+                SystemCameraHooker,
+                SettingHooker,
+                MsgFontHooker,
+            )
         hooks.forEach { hooker ->
             if (hooker.isShow) settings.add(hooker.toSettingData())
             if (hooker !== ChatMenuHooker) hooker.load()

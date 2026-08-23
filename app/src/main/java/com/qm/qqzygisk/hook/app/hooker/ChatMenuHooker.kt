@@ -37,7 +37,10 @@ object ChatMenuHooker : BaseHooker() {
         }
     }
 
-    private fun openSavePanel(context: Context, picElement: Any) {
+    private fun openSavePanel(
+        context: Context,
+        picElement: Any,
+    ) {
         runCatching {
             SaveImagePanel.show(context, resolveImageUrls(picElement))
         }.onFailure {
@@ -48,28 +51,52 @@ object ChatMenuHooker : BaseHooker() {
 
     private fun resolveImageUrls(picElement: Any): List<String> {
         val originUrl = invokeStringGetter(picElement, "getOriginImageUrl").orEmpty()
-        val legacyUrl = invokeStringGetter(picElement, "getMd5HexStr")
-            ?.takeIf(String::isNotBlank)
-            ?.let { "https://gchat.qpic.cn/gchatpic_new/0/0-0-${it.uppercase()}/0" }
-        val candidates = when {
-            originUrl.startsWith("https://") || originUrl.startsWith("http://") -> {
-                listOf(NtImageRkeyProvider.sign(originUrl))
-            }
+        val candidates =
+            when {
+                originUrl.startsWith("https://") || originUrl.startsWith("http://") -> {
+                    listOf(originUrl)
+                }
 
-            originUrl.startsWith("/download") -> {
-                val ntUrl = "https://multimedia.nt.qq.com.cn$originUrl"
-                listOf(NtImageRkeyProvider.sign(ntUrl), ntUrl)
-            }
+                originUrl.startsWith("/download") -> {
+                    val ntUrl = "https://multimedia.nt.qq.com.cn$originUrl"
+                    val signedUrl =
+                        if (originUrl.contains("rkey=")) {
+                            ntUrl
+                        } else {
+                            NtImageRkeyProvider.get(originUrl)?.let { appendRkey(ntUrl, it) }
+                        }
+                    listOfNotNull(signedUrl, ntUrl)
+                }
 
-            originUrl.startsWith("/") -> listOf("https://gchat.qpic.cn$originUrl")
-            else -> emptyList()
-        }
-        return (candidates + listOfNotNull(legacyUrl)).distinct()
+                originUrl.startsWith("/") -> {
+                    listOf("https://gchat.qpic.cn$originUrl")
+                }
+
+                else -> {
+                    emptyList()
+                }
+            }
+        return candidates.distinct()
     }
 
-    private fun invokeStringGetter(instance: Any, methodName: String): String? {
-        return runCatching {
+    private fun appendRkey(
+        imageUrl: String,
+        rkey: String,
+    ): String {
+        val separator =
+            when {
+                imageUrl.endsWith('?') || imageUrl.endsWith('&') -> ""
+                imageUrl.contains('?') -> "&"
+                else -> "?"
+            }
+        return imageUrl + separator + rkey.removePrefix("?").removePrefix("&")
+    }
+
+    private fun invokeStringGetter(
+        instance: Any,
+        methodName: String,
+    ): String? =
+        runCatching {
             instance.javaClass.getMethod(methodName).invoke(instance) as? String
         }.getOrNull()
-    }
 }
