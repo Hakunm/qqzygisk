@@ -34,6 +34,9 @@ object ChatImageSender {
     @Volatile
     private var currentAioParam: WeakReference<Any>? = null
 
+    @Volatile
+    private var lastContact: ContactDescriptor? = null
+
     data class ContactDescriptor(
         val chatType: Int,
         val peerUid: String,
@@ -43,13 +46,14 @@ object ChatImageSender {
     fun updateAioParam(value: Any?) {
         if (value?.javaClass?.name != AIO_PARAM_CLASS) return
         currentAioParam = WeakReference(value)
+        runCatching { lastContact = extractContact(value) }
+            .onFailure { Log.warn("缓存聊天会话失败", it) }
     }
 
     /** 发送本地文件。默认按普通图片，type 可选表情。 */
     fun sendImage(file: File, type: SendType = SendType.IMAGE): Result<Unit> = runCatching {
         check(file.isFile && file.canRead()) { "图片文件不可用" }
-        val aioParam = currentAioParam?.get() ?: error("没有可用的聊天会话，请重新进入聊天页面")
-        val descriptor = extractContact(aioParam)
+        val descriptor = resolveContact()
 
         val msgUtilType = loadClass(MSG_UTIL_API_CLASS)
         val msgUtil = qRouteApi(msgUtilType)
@@ -103,6 +107,15 @@ object ChatImageSender {
             current = next
         }
         return null
+    }
+
+    private fun resolveContact(): ContactDescriptor {
+        val live = currentAioParam?.get()
+        if (live != null) {
+            runCatching { return extractContact(live).also { lastContact = it } }
+                .onFailure { Log.warn("读取当前会话失败，将使用上次会话", it) }
+        }
+        return lastContact ?: error("没有可用的聊天会话，请重新进入聊天页面")
     }
 
     private fun extractContact(aioParam: Any): ContactDescriptor {

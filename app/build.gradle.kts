@@ -247,6 +247,8 @@ dependencies {
     compileOnly(libs.xposed.api)
     debugImplementation(libs.androidx.compose.ui.tooling)
 
+    testImplementation("junit:junit:4.13.2")
+
 //    implementation(files("libs/runtime-release.aar"))
 }
 

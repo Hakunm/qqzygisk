@@ -53,32 +53,18 @@ object ChatMenuHooker : BaseHooker() {
             ?.let { "https://gchat.qpic.cn/gchatpic_new/0/0-0-${it.uppercase()}/0" }
         val candidates = when {
             originUrl.startsWith("https://") || originUrl.startsWith("http://") -> {
-                listOf(originUrl)
+                listOf(NtImageRkeyProvider.sign(originUrl))
             }
 
             originUrl.startsWith("/download") -> {
                 val ntUrl = "https://multimedia.nt.qq.com.cn$originUrl"
-                val signedUrl = if (originUrl.contains("rkey=")) {
-                    ntUrl
-                } else {
-                    NtImageRkeyProvider.get(originUrl)?.let { appendRkey(ntUrl, it) }
-                }
-                listOfNotNull(signedUrl, ntUrl)
+                listOf(NtImageRkeyProvider.sign(ntUrl), ntUrl)
             }
 
             originUrl.startsWith("/") -> listOf("https://gchat.qpic.cn$originUrl")
             else -> emptyList()
         }
         return (candidates + listOfNotNull(legacyUrl)).distinct()
-    }
-
-    private fun appendRkey(imageUrl: String, rkey: String): String {
-        val separator = when {
-            imageUrl.endsWith('?') || imageUrl.endsWith('&') -> ""
-            imageUrl.contains('?') -> "&"
-            else -> "?"
-        }
-        return imageUrl + separator + rkey.removePrefix("?").removePrefix("&")
     }
 
     private fun invokeStringGetter(instance: Any, methodName: String): String? {
