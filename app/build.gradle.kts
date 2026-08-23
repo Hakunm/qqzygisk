@@ -24,6 +24,7 @@ zygisk {
     entrypoint = "com.qm.qqzygisk.Main"
     archiveName = "qqhook"
     dir = "adb/qqzygisk"
+    updateJson = "https://raw.githubusercontent.com/Night-stars-1/qqzygisk/master/update.json"
 }
 
 android {
@@ -212,7 +213,13 @@ tasks.register("MagiskZipTask") {
         val zipFile = File(layout.buildDirectory.asFile.get(), "outputs/magisk/release/qqhook.zip")
         val tempDir = Files.createTempDirectory("module_unzip_").toFile()
         unzip(zipFile, tempDir)
-        File(layout.projectDirectory.asFile, "release/app-release.apk").copyTo(File(tempDir, "app-release.apk"), overwrite = true)
+        val apk =
+            listOf(
+                File(layout.projectDirectory.asFile, "release/app-release.apk"),
+                File(layout.buildDirectory.asFile.get(), "outputs/apk/release/app-release.apk"),
+                File(layout.buildDirectory.asFile.get(), "outputs/apk/release/app-release-unsigned.apk"),
+            ).firstOrNull { it.isFile } ?: error("未找到 app-release.apk")
+        apk.copyTo(File(tempDir, "app-release.apk"), overwrite = true)
         File(layout.projectDirectory.asFile, "src/main/resources/customize.sh").copyTo(File(tempDir, "customize.sh"), overwrite = true)
         File(layout.projectDirectory.asFile, "src/main/resources/uninstall.sh").copyTo(File(tempDir, "uninstall.sh"), overwrite = true)
         normalizeShellLineEndings(tempDir)
@@ -231,6 +238,7 @@ dependencies {
     implementation(libs.androidx.exifinterface)
     implementation(libs.r8.annotations)
     implementation(libs.androidvmtools)
+    implementation(libs.zygote.runtime)
     implementation(libs.kavaref.core)
     implementation(libs.kavaref.extension)
     implementation(libs.browser)
@@ -252,8 +260,8 @@ dependencies {
 //    implementation(files("libs/runtime-release.aar"))
 }
 
-//plugins.withId("io.github.vova7878.ZygoteLoader") {
+//plugins.withId("io.github.nightstars1.ZygoteLoader") {
 //    configurations.implementation {
-//        exclude(group = "io.github.vova7878.ZygoteLoader", module = "runtime")
+//        exclude(group = "io.github.nightstars1.ZygoteLoader", module = "runtime")
 //    }
 //}

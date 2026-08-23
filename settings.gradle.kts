@@ -1,4 +1,5 @@
 pluginManagement {
+    includeBuild("ZygoteLoader")
     repositories {
         mavenLocal()
         google {
@@ -20,7 +21,7 @@ dependencyResolutionManagement {
         google()
         mavenCentral()
         maven("https://central.sonatype.com/repository/maven-snapshots")
-        maven { url =  uri("https://api.xposed.info/") }
+        maven("https://api.xposed.info/")
     }
 }
 
@@ -31,5 +32,11 @@ includeBuild("AndroidVMTools") {
         // 将远程坐标替换为本地项目
         // 注意：这里的 GroupID 是 io.github.vova7878
         substitute(module("io.github.vova7878:AndroidVMTools")).using(project(":"))
+    }
+}
+includeBuild("ZygoteLoader") {
+    dependencySubstitution {
+        substitute(module("io.github.nightstars1.ZygoteLoader:runtime")).using(project(":runtime"))
+        substitute(module("io.github.vova7878.ZygoteLoader:runtime")).using(project(":runtime"))
     }
 }

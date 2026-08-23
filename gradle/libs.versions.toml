@@ -21,6 +21,7 @@ materialComponents = "1.14.0"
 [libraries]
 androidvmtools = { module = "io.github.vova7878:AndroidVMTools", version.ref = "androidvmtools" }
 r8-annotations = { module = "io.github.vova7878:R8Annotations", version.ref = "r8_annotations" }
+zygote-runtime = { module = "io.github.nightstars1.ZygoteLoader:runtime", version.ref = "zygisk" }
 kavaref-core = { module = "com.highcapable.kavaref:kavaref-core", version.ref = "kavarefCore" }
 kavaref-extension = { module = "com.highcapable.kavaref:kavaref-extension", version.ref = "kavarefCore" }
 browser = { group = "androidx.browser", name = "browser", version.ref = "browser" }
@@ -39,6 +40,6 @@ material-components = { group = "com.google.android.material", name = "material"
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
 kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
-java-zygisk = { id = "io.github.vova7878.ZygoteLoader", version.ref = "zygisk" }
+java-zygisk = { id = "io.github.nightstars1.ZygoteLoader", version.ref = "zygisk" }
 lsparanoid = { id = "org.lsposed.lsparanoid", version.ref = "lsparanoid" }
 compose-compiler = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
