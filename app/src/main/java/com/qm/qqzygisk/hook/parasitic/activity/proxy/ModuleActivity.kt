@@ -68,8 +68,10 @@ interface ModuleActivity {
          * @see Activity.onCreate
          */
         fun onCreate(savedInstanceState: Bundle?) {
-            if (self.moduleTheme != -1)
-                selfActivity.setTheme(self.moduleTheme)
+            if (self.moduleTheme != -1) {
+                runCatching { selfActivity.setTheme(self.moduleTheme) }
+                    .onFailure { Log.warn("set module theme failed", it) }
+            }
         }
 
         /**

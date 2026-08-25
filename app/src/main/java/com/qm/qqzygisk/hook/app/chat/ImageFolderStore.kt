@@ -16,7 +16,7 @@ object ImageFolderStore {
     const val FUNBOX_PATH_KEY = "funbox_emoticon_path"
     const val TG_STICKERS_PATH_KEY = "tg_stickers_emoticon_path"
     const val DEFAULT_QQ_ZYGISK_PATH =
-        "/storage/emulated/0/Android/media/com.tencent.mobileqq/.qqzygisk"
+        "/storage/emulated/0/Android/media/com.tencent.mobileqq/.qhook"
     const val DEFAULT_FUNBOX_PATH =
         "/storage/self/primary/Android/media/com.tencent.mobileqq/.fun/Sticker/Storage"
     const val DEFAULT_TG_STICKERS_PATH =
@@ -24,11 +24,17 @@ object ImageFolderStore {
     val ROOT_PATH: String
         get() = configuredPath(QQ_ZYGISK_PATH_KEY, DEFAULT_QQ_ZYGISK_PATH)
     val SCAN_ROOTS: List<String>
-        get() = listOf(
-            configuredPath(FUNBOX_PATH_KEY, DEFAULT_FUNBOX_PATH),
-            configuredPath(TG_STICKERS_PATH_KEY, DEFAULT_TG_STICKERS_PATH),
-            ROOT_PATH,
-        ).distinct()
+        get() = buildList {
+            add(configuredPath(FUNBOX_PATH_KEY, DEFAULT_FUNBOX_PATH))
+            add(configuredPath(TG_STICKERS_PATH_KEY, DEFAULT_TG_STICKERS_PATH))
+            add(ROOT_PATH)
+            val legacy = File(LEGACY_LOCAL_PATH)
+            if (legacy.isDirectory && LEGACY_LOCAL_PATH != ROOT_PATH) {
+                add(LEGACY_LOCAL_PATH)
+            }
+        }.distinct()
+    private const val LEGACY_LOCAL_PATH =
+        "/storage/emulated/0/Android/media/com.tencent.mobileqq/.qqzygisk"
     private const val LAST_FOLDER_FILE = ".last_folder"
     private const val LAST_FOLDER_KEY = "emoticon_panel_last_folder"
     private const val USAGE_FILE = ".usage.json"

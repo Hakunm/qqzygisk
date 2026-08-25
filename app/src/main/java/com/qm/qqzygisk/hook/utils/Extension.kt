@@ -1,5 +1,6 @@
 package com.qm.qqzygisk.hook.utils
 
+import android.app.Activity
 import android.content.Context
 import android.content.Intent
 import android.content.res.Resources
@@ -24,7 +25,18 @@ fun <T> Any.get(key: String): T? {
 }
 
 fun Context.startModuleSettings() {
-    startActivity(Intent(this, SettingActivity::class.java))
+    val intent = Intent(this, SettingActivity::class.java)
+    if (this !is Activity) {
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    }
+    runCatching { startActivity(intent) }
+        .onFailure { first ->
+            Log.error("startModuleSettings", first)
+            runCatching {
+                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                (applicationContext ?: this).startActivity(intent)
+            }.onFailure { Log.error("startModuleSettings retry", it) }
+        }
 }
 
 /**

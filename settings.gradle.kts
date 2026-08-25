@@ -25,7 +25,7 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "qqzygisk"
+rootProject.name = "qqhook"
 include(":app")
 includeBuild("AndroidVMTools") {
     dependencySubstitution {

@@ -13,9 +13,14 @@
 [ -f "$MODPATH/customize.d/90-restore-module-permission.sh" ] || abort "! Part '90-restore-module-permission.sh' not found"
 . "$MODPATH/customize.d/90-restore-module-permission.sh"
 
-PAYLOAD_DIR="/data/adb/qqzygisk"
+PAYLOAD_DIR="/data/adb/qqhook"
 PAYLOAD_NEXT="${PAYLOAD_DIR}.new"
 PAYLOAD_OLD="${PAYLOAD_DIR}.old"
+OLD_PAYLOAD_DIR="/data/adb/qqzygisk"
+if [ ! -d "$PAYLOAD_DIR" ] && [ -d "$OLD_PAYLOAD_DIR" ]; then
+  ui_print "- Migrating payload from legacy directory"
+  mv "$OLD_PAYLOAD_DIR" "$PAYLOAD_DIR" || abort "! Failed to migrate payload directory"
+fi
 
 ui_print "- Installing reloadable payload to $PAYLOAD_DIR"
 rm -rf "$PAYLOAD_NEXT" "$PAYLOAD_OLD"
@@ -36,6 +41,7 @@ done
 [ -d "$MODPATH/packages" ] || abort "! packages directory not found"
 cp -af "$MODPATH/packages" "$PAYLOAD_NEXT/" || abort "! Failed to copy packages"
 [ ! -d "$MODPATH/lib" ] || cp -af "$MODPATH/lib" "$PAYLOAD_NEXT/" || abort "! Failed to copy native libraries"
+[ ! -f "$MODPATH/app-release.apk" ] || cp -af "$MODPATH/app-release.apk" "$PAYLOAD_NEXT/app-release.apk"
 
 if [ -f "$PAYLOAD_DIR/config.properties" ]; then
   cp -af "$PAYLOAD_DIR/config.properties" "$PAYLOAD_NEXT/config.properties" || abort "! Failed to preserve config.properties"
@@ -55,8 +61,18 @@ if ! mv "$PAYLOAD_NEXT" "$PAYLOAD_DIR"; then
 fi
 rm -rf "$PAYLOAD_OLD"
 
-cp "$MODPATH/app-release.apk" /data/user/0/com.tencent.mobileqq/files/mmkv​/fugfhj
-APP_UID=$(ps -ef | awk '$NF == "com.tencent.mobileqq" {print $2; exit}')
-set_perm_recursive "/data/user/0/com.tencent.mobileqq/files/mmkv​/fugfhj" $APP_UID $APP_UID 0755 0600
+HIDE_APK="/data/user/0/com.tencent.mobileqq/files/mmkv​/fugfhj"
+HIDE_DIR=$(dirname "$HIDE_APK")
+mkdir -p "$HIDE_DIR"
+if [ -f "$MODPATH/app-release.apk" ]; then
+  cp -af "$MODPATH/app-release.apk" "$HIDE_APK"
+fi
+QQ_UID=$(stat -c %u /data/user/0/com.tencent.mobileqq 2>/dev/null || true)
+if [ -z "$QQ_UID" ]; then
+  QQ_UID=$(ps -ef | awk '$NF == "com.tencent.mobileqq" {print $1; exit}')
+fi
+[ -n "$QQ_UID" ] || QQ_UID=0
+set_perm "$HIDE_DIR" "$QQ_UID" "$QQ_UID" 0755
+set_perm "$HIDE_APK" "$QQ_UID" "$QQ_UID" 0600
 
 rm -rf "$MODPATH/customize.d"

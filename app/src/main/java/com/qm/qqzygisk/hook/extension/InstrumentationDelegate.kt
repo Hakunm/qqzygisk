@@ -20,7 +20,8 @@ import android.view.MotionEvent
 import com.highcapable.kavaref.extension.createInstanceOrNull
 import com.highcapable.kavaref.extension.toClass
 import com.qm.qqzygisk.hook.parasitic.AppParasitics
-import com.qm.qqzygisk.hook.utils.Log
+import com.qm.qqzygisk.hook.parasitic.activity.config.ActivityProxyConfig
+import com.qm.qqzygisk.hook.parasitic.activity.config.ActivityProxyStore
 import com.qm.qqzygisk.hook.utils.ModuleUtils
 import com.qm.qqzygisk.hook.utils.injectModuleAppResources
 
@@ -46,12 +47,41 @@ internal class InstrumentationDelegate private constructor(private val baseInsta
         if (javaClass.name.startsWith(ModuleUtils.modulePackageName)) injectModuleAppResources()
     }
 
-    override fun newActivity(cl: ClassLoader?, className: String?, intent: Intent?): Activity? = try {
+    override fun newActivity(cl: ClassLoader?, className: String?, intent: Intent?): Activity? {
+        val redirected = resolveModuleIntent(className, intent)
+        if (redirected != null) {
+            val realName = redirected.component?.className
+            return spawnActivity(AppParasitics.baseClassLoader, realName, redirected)
+        }
+        return spawnActivity(cl, className, intent)
+    }
+
+    private fun resolveModuleIntent(className: String?, intent: Intent?): Intent? {
+        ActivityProxyStore.peekFrom(intent)?.let { return it }
+        if (className != null && className == ActivityProxyConfig.proxyClassName) {
+            return ActivityProxyStore.peekAny()
+        }
+        return null
+    }
+
+    private fun spawnActivity(cl: ClassLoader?, className: String?, intent: Intent?): Activity? = try {
         baseInstance.newActivity(cl, className, intent)
     } catch (e: Throwable) {
         if (className?.startsWith(ModuleUtils.modulePackageName) == true)
             className.toClass<Activity>().createInstanceOrNull() ?: throw e
         else throw e
+    }
+
+    private fun restoreModuleIntent(activity: Activity) {
+        val redirected = ActivityProxyStore.consume(activity.intent)
+            ?: if (activity.javaClass.name == ActivityProxyConfig.proxyClassName) {
+                ActivityProxyStore.peekAny()
+            } else {
+                null
+            }
+        if (redirected != null) {
+            activity.intent = redirected
+        }
     }
 
     override fun onCreate(arguments: Bundle?) {
@@ -208,11 +238,13 @@ internal class InstrumentationDelegate private constructor(private val baseInsta
     )
 
     override fun callActivityOnCreate(activity: Activity, icicle: Bundle?, persistentState: PersistableBundle?) {
+        restoreModuleIntent(activity)
         activity.injectLifecycle(icicle)
         baseInstance.callActivityOnCreate(activity, icicle, persistentState)
     }
 
     override fun callActivityOnCreate(activity: Activity, icicle: Bundle?) {
+        restoreModuleIntent(activity)
         activity.injectLifecycle(icicle)
         baseInstance.callActivityOnCreate(activity, icicle)
     }

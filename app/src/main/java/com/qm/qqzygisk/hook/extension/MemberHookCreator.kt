@@ -1,9 +1,7 @@
 package com.qm.qqzygisk.hook.extension
 
 import com.highcapable.kavaref.extension.isStatic
-import com.highcapable.kavaref.resolver.MethodResolver
 import com.highcapable.kavaref.resolver.base.MemberResolver
-import com.qm.qqzygisk.hook.utils.Log
 import com.qm.qqzygisk.hook.utils.ModuleUtils
 import com.v7878.unsafe.invoke.EmulatedStackFrame
 import com.v7878.vmtools.HookTransformer
@@ -11,10 +9,9 @@ import com.v7878.vmtools.Hooks
 import com.v7878.vmtools.Hooks.EntryPointType
 import de.robv.android.xposed.XC_MethodHook
 import de.robv.android.xposed.XposedBridge
-import de.robv.android.xposed.XposedHelpers
 import java.lang.invoke.MethodHandle
-import java.lang.invoke.MethodType
 import java.lang.reflect.Executable
+import java.lang.reflect.Modifier
 
 
 infix fun MemberResolver<*, *>.hook(action: MemberHookCreator.() -> Unit) {
@@ -27,14 +24,29 @@ infix fun List<MemberResolver<*, *>>.hookAll(action: MemberHookCreator.() -> Uni
     }
 }
 
-class MemberHookCreator internal constructor(private val hookClass: MemberResolver<*, *>) {
+fun Executable.hook(action: MemberHookCreator.() -> Unit) {
+    MemberHookCreator(this).apply(action).build()
+}
+
+class MemberHookCreator {
     /** [before] 回调 */
     private var beforeHookCallback: (MethodCall.() -> Unit)? = null
 
     /** [after] 回调 */
     private var afterHookCallback: (MethodCall.() -> Unit)? = null
 
-    private val isStatic = hookClass.self.isStatic
+    private val target: Executable
+    private val isStatic: Boolean
+
+    internal constructor(hookClass: MemberResolver<*, *>) {
+        target = hookClass.self as Executable
+        isStatic = hookClass.self.isStatic
+    }
+
+    internal constructor(executable: Executable) {
+        target = executable
+        isStatic = Modifier.isStatic(executable.modifiers)
+    }
 
     fun before(initiate: MethodCall.() -> Unit) {
         beforeHookCallback = initiate
@@ -89,7 +101,7 @@ class MemberHookCreator internal constructor(private val hookClass: MemberResolv
         }
 
         Hooks.hook(
-            hookClass.self as Executable,
+            target,
             EntryPointType.DIRECT,
             myHook,
             EntryPointType.DIRECT
@@ -119,7 +131,7 @@ class MemberHookCreator internal constructor(private val hookClass: MemberResolv
             }
         }
         XposedBridge.hookMethod(
-            hookClass.self,
+            target,
             hook
         )
     }

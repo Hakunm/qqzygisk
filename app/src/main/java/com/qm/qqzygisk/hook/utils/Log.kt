@@ -7,8 +7,8 @@ import org.lsposed.lsparanoid.Obfuscate
 
 @Obfuscate
 object Log {
-    private const val LSP = "LSPosed"
-    private const val TAG = "QQ Zygisk"
+    private const val LSP = "qm.mod"
+    private const val TAG = "QHook"
 
     private data class WLogData(
         val tag: String = TAG,

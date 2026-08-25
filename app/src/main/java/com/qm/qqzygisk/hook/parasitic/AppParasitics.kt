@@ -116,6 +116,7 @@ internal object AppParasitics {
         runCatching {
             ActivityProxyConfig.apply {
                 proxyIntentName = "${ModuleUtils.modulePackageName}.ACTIVITY_PROXY_INTENT"
+                proxyTokenName = "${ModuleUtils.modulePackageName}.ACTIVITY_PROXY_TOKEN"
                 proxyClassName = proxy?.let {
                     when (it) {
                         is String, is CharSequence -> it.toString()
@@ -234,11 +235,12 @@ internal object AppParasitics {
         runCatching {
             if (currentPackageName == ModuleUtils.modulePackageName)
                 return Log.error("You cannot inject module resources into yourself")
+            val apkPath = ModuleUtils.ensureModuleApkPath()
             hostResources.assets.asResolver()
                 .firstMethod {
                     name = "addAssetPath"
                     parameters(String::class)
-                }.invoke(ModuleUtils.moduleAppFilePath)
+                }.invoke(apkPath)
             injectedResources.add(hostResources)
         }.onFailure {
             Log.error("Failed to inject module resources into [$hostResources]", it)

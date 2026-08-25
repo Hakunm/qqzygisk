@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+    <application>
+        <activity android:name=".ui.activity.SettingActivity">
+            <intent-filter tools:node="removeAll" />
+        </activity>
+        <meta-data
+            android:name="xposedmodule"
+            tools:node="remove" />
+        <meta-data
+            android:name="xposeddescription"
+            tools:node="remove" />
+        <meta-data
+            android:name="xposedminversion"
+            tools:node="remove" />
+        <meta-data
+            android:name="xposedscope"
+            tools:node="remove" />
+    </application>
+</manifest>

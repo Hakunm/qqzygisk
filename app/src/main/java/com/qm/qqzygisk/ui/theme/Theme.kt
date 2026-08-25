@@ -16,6 +16,13 @@ import com.qm.qqzygisk.R
 @Composable
 private fun resourceColorScheme(darkTheme: Boolean): ColorScheme {
     val base = if (darkTheme) darkColorScheme() else lightColorScheme()
+    return runCatching {
+        resourceColorSchemeOrThrow(base)
+    }.getOrElse { base }
+}
+
+@Composable
+private fun resourceColorSchemeOrThrow(base: ColorScheme): ColorScheme {
     return base.copy(
         primary = colorResource(R.color.qqz_primary),
         onPrimary = colorResource(R.color.qqz_on_primary),

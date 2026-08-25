@@ -14,6 +14,11 @@ internal object ActivityProxyConfig {
     internal var proxyIntentName = ""
 
     /**
+     * In-process token extra. Safer than embedding the real Intent on newer Android.
+     */
+    internal var proxyTokenName = ""
+
+    /**
      * 需要代理的 [Activity] 类名
      */
     internal var proxyClassName = ""

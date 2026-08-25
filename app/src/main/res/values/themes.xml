@@ -11,7 +11,7 @@
         <item name="android:enforceNavigationBarContrast">false</item>
     </style>
 
-    <style name="Theme.QQZygisk.MaterialDialog" parent="Theme.Material3.DayNight.Dialog.Alert">
+    <style name="Theme.QHook.MaterialDialog" parent="Theme.Material3.DayNight.Dialog.Alert">
         <item name="colorPrimary">@color/qqz_primary</item>
         <item name="colorOnPrimary">@color/qqz_on_primary</item>
         <item name="colorPrimaryContainer">@color/qqz_primary_container</item>

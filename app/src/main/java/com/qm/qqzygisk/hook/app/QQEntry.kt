@@ -8,6 +8,8 @@ import com.qm.qqzygisk.hook.app.base.SettingData
 import com.qm.qqzygisk.hook.app.data.HostData
 import com.qm.qqzygisk.hook.app.data.HostData.toAppClass
 import com.qm.qqzygisk.hook.app.chat.NtImageRkeyProvider
+import com.qm.qqzygisk.hook.app.detect.AntiDetect
+import com.qm.qqzygisk.hook.app.hooker.AntiRevokeHooker
 import com.qm.qqzygisk.hook.app.hooker.ChatMenuHooker
 import com.qm.qqzygisk.hook.app.hooker.EmoticonButtonHooker
 import com.qm.qqzygisk.hook.app.hooker.EmoticonPanelHooker
@@ -22,6 +24,7 @@ import com.qm.qqzygisk.hook.parasitic.AppParasitics
 import com.qm.qqzygisk.hook.parasitic.AppParasitics.setInstrumentation
 import com.qm.qqzygisk.hook.utils.HookSettings
 import com.qm.qqzygisk.hook.utils.Log
+import com.qm.qqzygisk.hook.utils.ModuleUtils
 import com.qm.qqzygisk.hook.utils.onAppLifecycle
 import com.qm.qqzygisk.hook.utils.registerModuleAppActivities
 
@@ -35,6 +38,8 @@ object QQEntry {
         settings.clear()
         HostData.init(loader)
         Log.info("running on: ${HostData.toVerStr()}")
+        runCatching { AntiDetect.install() }
+            .onFailure { Log.error("安装检测链拦截失败", it) }
         runCatching { NtImageRkeyProvider.installHook() }
             .onFailure { Log.error("安装 NT 图片 rkey hook 失败", it) }
         val generalSettingActivityClass = "com.tencent.mobileqq.activity.photo.CameraPreviewActivity".toAppClass()
@@ -54,8 +59,10 @@ object QQEntry {
                 Log.info("hook settings: ${HookSettings.dump(settings)}")
             }
             onCreate {
+                runCatching { ModuleUtils.ensureModuleApkPath() }
                 registerModuleAppActivities(proxy = generalSettingActivityClass)
                 ChatMenuHooker.load()
+                AntiRevokeHooker.retry()
             }
         }
         val hooks =
@@ -68,6 +75,7 @@ object QQEntry {
                 SystemCameraHooker,
                 SettingHooker,
                 MsgFontHooker,
+                AntiRevokeHooker,
             )
         hooks.forEach { hooker ->
             if (hooker.isShow) settings.add(hooker.toSettingData())

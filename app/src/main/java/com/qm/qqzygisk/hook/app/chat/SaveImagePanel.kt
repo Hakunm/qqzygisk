@@ -82,10 +82,10 @@ class SaveImagePanel private constructor(
         ?: actions.firstOrNull()
     private var actionButton: ImageButton? = null
     private val thumbnailExecutor = Executors.newFixedThreadPool(2) { task ->
-        Thread(task, "QQZygisk-ImageThumbnail").apply { isDaemon = true }
+        Thread(task, "QHook-ImageThumbnail").apply { isDaemon = true }
     }
     private val folderCoverExecutor = Executors.newSingleThreadExecutor { task ->
-        Thread(task, "QQZygisk-FolderCover").apply { isDaemon = true }
+        Thread(task, "QHook-FolderCover").apply { isDaemon = true }
     }
     private val thumbnailCache = object : LruCache<String, Bitmap>(THUMBNAIL_CACHE_KB) {
         override fun sizeOf(key: String, value: Bitmap): Int = value.allocationByteCount / 1024
@@ -797,7 +797,7 @@ class SaveImagePanel private constructor(
                     Log.error("加载聊天图片预览失败（${imageUrls.size} 个候选地址）", it)
                 }
             }
-        }, "QQZygisk-ImagePreview").start()
+        }, "QHook-ImagePreview").start()
     }
 
     private fun showCreateFolder() {
@@ -998,7 +998,7 @@ class SaveImagePanel private constructor(
             }
             host.injectModuleAppResources()
             val moduleLoader = SaveImagePanel::class.java.classLoader ?: host.classLoader
-            val themed = object : ContextThemeWrapper(host, R.style.Theme_QQZygisk_MaterialDialog) {
+            val themed = object : ContextThemeWrapper(host, R.style.Theme_QHook_MaterialDialog) {
                 override fun getClassLoader(): ClassLoader = moduleLoader
             }
             SaveImagePanel(

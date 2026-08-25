@@ -131,7 +131,7 @@ private fun MainSettings(
                     color = MaterialTheme.colorScheme.onSurface,
                 )
                 Text(
-                    text = "QQ Zygisk、FunBox、TGStickersExported",
+                    text = "本地图片、FunBox、TGStickersExported",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -195,7 +195,7 @@ private fun ColumnScope.PathSettings() {
         value = qqZygiskPath,
         onValueChange = { qqZygiskPath = it },
         modifier = Modifier.fillMaxWidth(),
-        label = { Text("QQ Zygisk 图片目录") },
+        label = { Text("本地图片目录") },
         minLines = 2,
         maxLines = 3,
     )

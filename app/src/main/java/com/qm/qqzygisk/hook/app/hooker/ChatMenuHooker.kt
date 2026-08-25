@@ -35,6 +35,7 @@ object ChatMenuHooker : BaseHooker() {
         }.onFailure {
             Log.error("安装 NT 图片 rkey hook 失败", it)
         }
+        AntiRevokeHooker.retry()
     }
 
     private fun openSavePanel(

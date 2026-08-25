@@ -1,18 +1,14 @@
 package com.qm.qqzygisk.hook.parasitic.activity.delegate.caller
 
-import android.app.Activity
-import android.app.ActivityManager
 import android.content.Intent
-import com.highcapable.kavaref.extension.createInstanceAsTypeOrNull
 import com.highcapable.kavaref.extension.hasClass
 import com.highcapable.kavaref.extension.isSubclassOf
 import com.highcapable.kavaref.extension.toClassOrNull
 import com.qm.qqzygisk.hook.parasitic.AppParasitics
-import com.qm.qqzygisk.hook.parasitic.AppParasitics.hostApplication
 import com.qm.qqzygisk.hook.parasitic.activity.config.ActivityProxyConfig
+import com.qm.qqzygisk.hook.parasitic.activity.config.ActivityProxyStore
+import com.qm.qqzygisk.hook.parasitic.activity.config.removeLaunchProtection
 import com.qm.qqzygisk.hook.parasitic.activity.proxy.ModuleActivity
-import com.qm.qqzygisk.hook.utils.Log
-import com.qm.qqzygisk.hook.utils.ModuleUtils.isXpEnvironment
 import java.lang.reflect.InvocationHandler
 import java.lang.reflect.Method
 
@@ -22,13 +18,13 @@ import java.lang.reflect.Method
  * IActivityManagerProxyCaller 拦截
  *     ↓
  * 替换为: CameraPreviewActivity (代理)
- *     + extras: 真实的 SettingActivity Intent
+ *     + extras: token（真实 Intent 留在进程内）
  *     ↓
  * 系统启动 CameraPreviewActivity
  *     ↓
  * HandlerDelegateCaller 拦截
  *     ↓
- * 从 extras 提取真实 Intent
+ * 从 token 取回真实 Intent
  *     ↓
  * 替换回: SettingActivity↓
  * 最终启动: SettingActivity
@@ -60,20 +56,20 @@ internal object IActivityManagerProxyCaller {
             if (component != null &&
                 component.packageName == AppParasitics.currentPackageName &&
                 javaClass.classLoader?.hasClass(component.className) == true
-            ) args[index] = Intent().apply {
-                /**
-                 * 验证类名是否存在
-                 * @return [String] or null
-                 */
-                fun String.verify() = if (hostApplication?.classLoader?.hasClass(this) == true) this else null
-                    setClassName(component.packageName, component.className.toClassOrNull()?.runCatching {
-                        when {
-                            this isSubclassOf ModuleActivity::class ->
-                                createInstanceAsTypeOrNull<ModuleActivity>()?.proxyClassName?.verify()
-                            else -> null
-                        }
-                    }?.getOrNull() ?: ActivityProxyConfig.proxyClassName)
-                putExtra(ActivityProxyConfig.proxyIntentName, argsInstance)
+            ) {
+                val targetClass = component.className.toClassOrNull()
+                if (targetClass != null && targetClass isSubclassOf ModuleActivity::class) {
+                    val token = ActivityProxyStore.put(argsInstance)
+                    argsInstance.removeLaunchProtection()
+                    args[index] = Intent().apply {
+                        setClassName(
+                            component.packageName,
+                            ActivityProxyConfig.proxyClassName,
+                        )
+                        putExtra(ActivityProxyConfig.proxyTokenName, token)
+                        removeLaunchProtection()
+                    }
+                }
             }
         }
         return method?.invoke(baseInstance, *(args ?: emptyArray()))

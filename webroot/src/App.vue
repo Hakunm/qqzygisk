@@ -16,7 +16,7 @@ const qqUpdate = async () => {
 </script>
 
 <template>
-  <n-page-header title="QQ Zygisk"> </n-page-header>
+  <n-page-header title="QHook"> </n-page-header>
   <n-flex class="my-1em" style="gap: 8px 12px">
     <n-card
       title="设置"

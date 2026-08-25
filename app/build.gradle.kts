@@ -17,13 +17,13 @@ plugins {
 zygisk {
     packages("com.tencent.mobileqq")
 
-    id = "com_qm.qqzygisk"
+    id = "com_qm.qqhook"
     name = "qqhook"
     author = "night_star"
     description = "表情面板同步TG表情包"
     entrypoint = "com.qm.qqzygisk.Main"
     archiveName = "qqhook"
-    dir = "adb/qqzygisk"
+    dir = "adb/qqhook"
     updateJson = "https://raw.githubusercontent.com/Night-stars-1/qqzygisk/master/update.json"
 }
 
@@ -35,8 +35,8 @@ android {
         applicationId = "com.qm.qqzygisk"
         minSdk = 28
         targetSdk = 36
-        versionCode = 7
-        versionName = "1.8"
+        versionCode = 16
+        versionName = "1.9.8"
         ndk.abiFilters.addAll(arrayOf("armeabi-v7a", "arm64-v8a"))
     }
 
@@ -67,7 +67,8 @@ android {
                 "kotlin/**",
                 "kotlin-tooling-metadata.json",
                 "**.bin",
-                "META-INF/xposed/**"
+                "META-INF/xposed/**",
+                "assets/xposed_init",
             )
         )
     }

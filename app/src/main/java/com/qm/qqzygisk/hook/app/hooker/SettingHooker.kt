@@ -7,6 +7,7 @@ import com.qm.qqzygisk.hook.app.base.BaseHooker
 import com.qm.qqzygisk.hook.app.data.HostData.appClassLoader
 import com.qm.qqzygisk.hook.app.data.HostData.toAppClass
 import com.qm.qqzygisk.hook.extension.hook
+import com.qm.qqzygisk.hook.utils.Log
 import com.qm.qqzygisk.hook.utils.startModuleSettings
 import java.lang.reflect.Proxy
 
@@ -44,7 +45,7 @@ object SettingHooker : BaseHooker()  {
 //                            parameters(List::class, CharSequence::class, CharSequence::class, Int::class, "kotlin.jvm.internal.DefaultConstructorMarker")
 //                        }
                     val resId = ctx.resources.getIdentifier("qui_tuning", "drawable", ctx.packageName);
-                    val entryItem = ctorSimpleItemProcessor.create(ctx, 6, "QQ Zygisk", resId, null)
+                    val entryItem = ctorSimpleItemProcessor.create(ctx, 6, "QHook", resId, null)
                     val setOnClickListener = entryItem.asResolver().firstMethod {
                         name = "B"
                         parameters {
@@ -54,12 +55,13 @@ object SettingHooker : BaseHooker()  {
                     val func0: Any? = Proxy.newProxyInstance(
                         appClassLoader,
                         arrayOf<Class<*>?>(setOnClickListener.self.parameters[0].type)
-                    ) { proxy, method, args ->
+                    ) { _, method, args ->
                         if (method.name.equals("invoke")) {
-                            ctx.startModuleSettings()
+                            runCatching { ctx.startModuleSettings() }
+                                .onFailure { Log.error("open settings", it) }
                             return@newProxyInstance null
                         }
-                        method.invoke(this, args)
+                        null
                     }
 
                     setOnClickListener.invoke(func0)

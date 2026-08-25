@@ -60,7 +60,7 @@ object SystemCameraHooker : BaseHooker() {
     private const val INPUT_FULL_SCREEN_MODE = "input_full_screen_mode"
     private const val INPUT_FULL_SCREEN_RESULT = "input_full_screen_mode_result"
 
-    private const val CACHE_DIR = "qqzygisk/system-camera"
+    private const val CACHE_DIR = "qhook/system-camera"
     private const val CACHE_MAX_AGE_MS = 24L * 60L * 60L * 1000L
     // QQ declares .fileprovider twice (support + AndroidX). The external alias
     // resolves unambiguously to the AndroidX provider used by current QQ.
@@ -432,7 +432,7 @@ object SystemCameraHooker : BaseHooker() {
         return Intent(MediaStore.ACTION_IMAGE_CAPTURE).apply {
             if (outputUri != null) {
                 putExtra(MediaStore.EXTRA_OUTPUT, outputUri)
-                clipData = ClipData.newRawUri("qqzygisk-system-camera", outputUri)
+                clipData = ClipData.newRawUri("qhook-system-camera", outputUri)
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                 addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
             }
