@@ -1,3 +1,7 @@
+# 2.0.3
+
+- 修复 2.0.1 选表情包秒开后「历史」是空的：无后缀表情重新算进历史，并读回旧目录 `.qqzygisk` 里的使用记录
+
 # 2.0.2
 
 - 消息+1 按 QAuxiliary RepeaterPlus 对齐：挂钩 `(int, *, List)`，从 `kotlin.Lazy` 取出 QQ 自己的 follow 按钮

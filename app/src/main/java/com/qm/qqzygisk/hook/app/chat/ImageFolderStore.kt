@@ -86,8 +86,12 @@ object ImageFolderStore {
         runCatching { if (!isDirectory) mkdirs() }
     }
 
-    fun isOwned(folder: File): Boolean =
-        folder.absolutePath.startsWith(root().absolutePath + "/")
+    fun isOwned(folder: File): Boolean {
+        val path = folder.absolutePath
+        return SCAN_ROOTS.any { scanRoot ->
+            path == scanRoot || path.startsWith("$scanRoot/")
+        }
+    }
 
     fun historyFolder(): File = File(root(), HISTORY_DIR_NAME)
 
@@ -215,10 +219,10 @@ object ImageFolderStore {
     fun matchSavedFolder(available: List<File>): File? {
         if (available.isEmpty()) return null
         val saved = HookSettings.getString(LAST_FOLDER_KEY, "").ifBlank {
-            File(root(), LAST_FOLDER_FILE)
-                .takeIf { it.isFile }
-                ?.readText()
-                ?.trim()
+            listOf(File(root(), LAST_FOLDER_FILE), File(LEGACY_LOCAL_PATH, LAST_FOLDER_FILE))
+                .firstNotNullOfOrNull { file ->
+                    file.takeIf { it.isFile }?.readText()?.trim()?.takeIf { it.isNotEmpty() }
+                }
                 .orEmpty()
         }
         if (saved.isEmpty()) return available.first()
@@ -271,21 +275,22 @@ object ImageFolderStore {
     }
 
     private fun cachedOwnedFolders(): List<File> {
-        val root = root()
-        val stamp = listingStamp(root)
-        ownedFolderCache?.let { cached ->
-            if (cached.path == root.absolutePath && cached.stamp == stamp) {
-                return cached.folders
-            }
+        val roots = SCAN_ROOTS
+        val stamp = roots.joinToString("|") { path ->
+            val folder = File(path)
+            "$path=${listingStamp(folder)}"
         }
-        val folders = listChildFolders(root)
+        ownedFolderCache?.let { cached ->
+            if (cached.path == stamp) return cached.folders
+        }
+        val folders = roots.flatMap { listChildFolders(File(it)) }
             .distinctBy { it.absolutePath }
             .filter { !isHistoryFolder(it) }
             .sortedWith(
                 compareByDescending<File> { folderUsage(it) }
                     .thenBy { it.name.lowercase() },
             )
-        ownedFolderCache = CachedFolders(root.absolutePath, stamp, folders)
+        ownedFolderCache = CachedFolders(stamp, stamp, folders)
         return folders
     }
 
@@ -409,9 +414,19 @@ object ImageFolderStore {
                 compareByDescending<Map.Entry<String, UsageEntry>> { it.value.count }
                     .thenByDescending { it.value.lastUsed },
             )
-            .map { File(it.key) }
-            .filter { it.isFile && isImageFile(it) }
+            .mapNotNull { resolveUsageFile(it.key) }
+            .distinctBy { it.absolutePath }
             .take(HISTORY_LIMIT)
+    }
+
+    private fun resolveUsageFile(path: String): File? {
+        val file = File(path)
+        if (file.isFile && isImageFile(file)) return file
+        if (path.startsWith("$LEGACY_LOCAL_PATH/")) {
+            val moved = File(root(), path.removePrefix("$LEGACY_LOCAL_PATH/"))
+            if (moved.isFile && isImageFile(moved)) return moved
+        }
+        return null
     }
 
     private fun bump(map: MutableMap<String, UsageEntry>, key: String, now: Long) {
@@ -426,19 +441,52 @@ object ImageFolderStore {
 
     private fun usageFile(): File = File(root(), USAGE_FILE)
 
+    private fun usageFileCandidates(): List<File> = buildList {
+        add(usageFile())
+        val legacy = File(LEGACY_LOCAL_PATH, USAGE_FILE)
+        if (legacy.absolutePath != usageFile().absolutePath) add(legacy)
+    }
+
     private fun loadUsageLocked(): UsageStore {
         usageCache?.let { return it }
-        val parsed = runCatching {
-            val raw = usageFile().takeIf { it.isFile }?.readText().orEmpty()
-            if (raw.isBlank()) return@runCatching UsageStore()
+        val merged = UsageStore()
+        usageFileCandidates().forEach { file ->
+            readUsageFile(file)?.let { mergeUsage(merged, it) }
+        }
+        usageCache = merged
+        return merged
+    }
+
+    private fun readUsageFile(file: File): UsageStore? {
+        if (!file.isFile) return null
+        return runCatching {
+            val raw = file.readText()
+            if (raw.isBlank()) return@runCatching null
             val json = JSONObject(raw)
             UsageStore(
                 files = readUsageMap(json.optJSONObject("files")),
                 folders = readUsageMap(json.optJSONObject("folders")),
             )
-        }.getOrDefault(UsageStore())
-        usageCache = parsed
-        return parsed
+        }.getOrNull()
+    }
+
+    private fun mergeUsage(target: UsageStore, extra: UsageStore) {
+        extra.files.forEach { (path, entry) -> mergeEntry(target.files, path, entry) }
+        extra.folders.forEach { (path, entry) -> mergeEntry(target.folders, path, entry) }
+    }
+
+    private fun mergeEntry(
+        map: MutableMap<String, UsageEntry>,
+        key: String,
+        extra: UsageEntry,
+    ) {
+        val current = map[key]
+        if (current == null) {
+            map[key] = UsageEntry(extra.count, extra.lastUsed)
+            return
+        }
+        current.count = maxOf(current.count, extra.count)
+        current.lastUsed = maxOf(current.lastUsed, extra.lastUsed)
     }
 
     private fun saveUsageLocked(store: UsageStore) {
@@ -525,7 +573,9 @@ object ImageFolderStore {
         if (name.startsWith(".") || name.startsWith("__cover__.") || name.endsWith(".txt.jpg")) {
             return false
         }
-        return name.substringAfterLast('.', "").lowercase() in imageExtensions
+        val ext = name.substringAfterLast('.', missingDelimiterValue = "").lowercase()
+        // 2.0.0 把无后缀文件排除了，FunBox 历史表情经常没后缀，历史就被滤空。
+        return ext.isEmpty() || ext in imageExtensions
     }
 
     private fun ensureFolder(folder: File) {
