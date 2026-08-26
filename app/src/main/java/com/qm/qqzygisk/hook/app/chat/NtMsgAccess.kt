@@ -90,6 +90,17 @@ internal object NtMsgAccess {
         return invokeNoArg(instance, "peekAppRuntime") ?: invokeNoArg(instance, "waitAppRuntime")
     }
 
+    fun createContact(chatType: Int, peerUid: String, guildId: String = ""): Any? {
+        val type = loadFirst(*contactTypes) ?: return null
+        val ctor = type.declaredConstructors.firstOrNull { candidate ->
+            candidate.parameterTypes.contentEquals(
+                arrayOf(Int::class.javaPrimitiveType, String::class.java, String::class.java),
+            )
+        } ?: return null
+        ctor.isAccessible = true
+        return runCatching { ctor.newInstance(chatType, peerUid, guildId) }.getOrNull()
+    }
+
     /** IKernelMsgService instance, following QAuxiliary's MsgServiceHelper chain. */
     fun kernelMsgService(): Any? {
         val runtime = currentRuntime()

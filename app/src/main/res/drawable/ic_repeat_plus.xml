@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24"
+    android:tint="?android:attr/textColorPrimary">
+    <!-- Material plus_one，给宿主菜单着色 -->
+    <path
+        android:fillColor="@android:color/white"
+        android:pathData="M10,8H8v4H4v2h4v4h2v-4h4v-2h-4zM14.5,6.08c0,0.05 0,0.11 -0.05,0.16L13.07,10h1.9l1.38,-3.76C16.4,6.19 16.4,6.13 16.4,6.08c0,-0.5 -0.41,-0.92 -0.92,-0.92s-0.98,0.42 -0.98,0.92z" />
+</vector>

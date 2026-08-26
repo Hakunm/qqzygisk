@@ -15,6 +15,7 @@ import com.qm.qqzygisk.hook.app.hooker.EmoticonButtonHooker
 import com.qm.qqzygisk.hook.app.hooker.EmoticonPanelHooker
 import com.qm.qqzygisk.hook.app.hooker.EmotionToPicHooker
 import com.qm.qqzygisk.hook.app.hooker.MsgFontHooker
+import com.qm.qqzygisk.hook.app.hooker.RepeaterHooker
 import com.qm.qqzygisk.hook.app.hooker.SettingHooker
 import com.qm.qqzygisk.hook.app.hooker.StartActivityHooker
 import com.qm.qqzygisk.hook.app.hooker.SystemCameraHooker
@@ -63,11 +64,13 @@ object QQEntry {
                 registerModuleAppActivities(proxy = generalSettingActivityClass)
                 ChatMenuHooker.load()
                 AntiRevokeHooker.retry()
+                RepeaterHooker.retry()
             }
         }
         val hooks =
             listOf(
                 ChatMenuHooker,
+                RepeaterHooker,
                 EmoticonButtonHooker,
                 EmoticonPanelHooker,
                 EmotionToPicHooker,

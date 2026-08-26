@@ -77,6 +77,14 @@ object ChatImageSender {
         foregroundActivities().forEach(::captureFrom)
     }
 
+    fun currentContactOrNull(): ContactDescriptor? {
+        rememberContact(currentAioParam?.get())
+        lastContact?.let { return it }
+        captureFromForeground()
+        rememberContact(currentAioParam?.get())
+        return lastContact
+    }
+
     /** 发送本地文件。默认按普通图片，type 可选表情。 */
     fun sendImage(file: File, type: SendType = SendType.IMAGE): Result<Unit> = runCatching {
         check(file.isFile && file.canRead()) { "图片文件不可用" }
@@ -136,13 +144,8 @@ object ChatImageSender {
         return null
     }
 
-    private fun resolveContact(): ContactDescriptor {
-        rememberContact(currentAioParam?.get())
-        lastContact?.let { return it }
-        captureFromForeground()
-        rememberContact(currentAioParam?.get())
-        return lastContact ?: error("没有可用的聊天会话，请重新进入聊天页面")
-    }
+    private fun resolveContact(): ContactDescriptor =
+        currentContactOrNull() ?: error("没有可用的聊天会话，请重新进入聊天页面")
 
     private fun rememberContact(root: Any?) {
         if (root == null) return

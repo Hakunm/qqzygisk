@@ -80,7 +80,7 @@ internal object RevokeTip {
 
     private fun addGrayTip(chatType: Int, peerUid: String, json: String): Outcome {
         val service = NtMsgAccess.kernelMsgService() ?: error("IKernelMsgService missing")
-        val contact = newContact(chatType, peerUid) ?: error("Contact missing")
+        val contact = NtMsgAccess.createContact(chatType, peerUid) ?: error("Contact missing")
         val element = newJsonGrayElement(chatType, json) ?: error("JsonGrayElement missing")
         val method = findAddGrayTip(service.javaClass, contact.javaClass, element.javaClass)
             ?: error("addLocalJsonGrayTipMsg missing")
@@ -116,17 +116,6 @@ internal object RevokeTip {
             method.parameterTypes.any { it.isAssignableFrom(contactType) } &&
             method.parameterTypes.any { it.isAssignableFrom(elementType) }
     } ?: serviceType.methods.firstOrNull { it.name == "addLocalJsonGrayTipMsg" }
-
-    private fun newContact(chatType: Int, peerUid: String): Any? {
-        val type = NtMsgAccess.loadFirst(*NtMsgAccess.contactTypes) ?: return null
-        val ctor = type.declaredConstructors.firstOrNull { candidate ->
-            candidate.parameterTypes.contentEquals(
-                arrayOf(Int::class.javaPrimitiveType, String::class.java, String::class.java),
-            )
-        } ?: return null
-        ctor.isAccessible = true
-        return runCatching { ctor.newInstance(chatType, peerUid, "") }.getOrNull()
-    }
 
     /** JsonGrayElement(long busiId, String json, String recentAbstract, boolean, String?) */
     private fun newJsonGrayElement(chatType: Int, json: String): Any? {

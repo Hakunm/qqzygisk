@@ -18,8 +18,9 @@ import java.util.concurrent.atomic.AtomicBoolean
 /**
  * 长按菜单匹配的消息内容类型。QQ 类名在这里解析，调用方只写枚举。
  */
-enum class ChatMenuType(internal val className: String) {
+enum class ChatMenuType(internal val className: String?) {
     Pic("com.tencent.qqnt.kernel.nativeinterface.PicElement"),
+    Any(null),
 }
 
 /** 菜单项插入位置，默认 [Back]。 */
@@ -154,7 +155,10 @@ object ChatMenu {
         val frontItems = mutableListOf<Any>()
         val backItems = mutableListOf<Any>()
         visibleEntries.forEach { entry ->
-            val element = findMessageElement(message, entry.type.resolveClass()) ?: return@forEach
+            val clickTarget = when (entry.type) {
+                ChatMenuType.Any -> message
+                else -> findMessageElement(message, entry.type.resolveClass()) ?: return@forEach
+            }
             val item = ChatMenuItemFactory.create(
                 baseClass = baseClass,
                 message = message,
@@ -165,7 +169,7 @@ object ChatMenu {
                 iconMethod = iconMethod,
                 idMethod = idMethod,
                 clickMethod = clickMethod,
-                callback = Runnable { entry.onClick(layout.context, element) },
+                callback = Runnable { entry.onClick(layout.context, clickTarget) },
             )
             if (entry.position == ChatMenuPosition.Front) {
                 frontItems += item
@@ -240,6 +244,8 @@ object ChatMenu {
         return null
     }
 
-    private fun ChatMenuType.resolveClass(): Class<*> =
-        typeClasses.getOrPut(this) { className.toAppClass() }
+    private fun ChatMenuType.resolveClass(): Class<*> {
+        val name = className ?: error("ChatMenuType.Any 没有对应的消息元素类")
+        return typeClasses.getOrPut(this) { name.toAppClass() }
+    }
 }
