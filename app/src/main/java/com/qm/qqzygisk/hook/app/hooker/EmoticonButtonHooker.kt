@@ -12,6 +12,7 @@ import com.qm.qqzygisk.hook.app.chat.ChatImageSender
 import com.qm.qqzygisk.hook.app.chat.ImagePanelAction
 import com.qm.qqzygisk.hook.app.chat.SaveImagePanel
 import com.qm.qqzygisk.hook.app.data.HostData.appClassLoader
+import com.qm.qqzygisk.hook.extension.MethodCall
 import com.qm.qqzygisk.hook.extension.hook
 import com.qm.qqzygisk.hook.extension.hookAll
 import com.qm.qqzygisk.hook.utils.HookSettings
@@ -33,6 +34,8 @@ object EmoticonButtonHooker : BaseHooker() {
     private const val PANEL_ACTION_KEY = "emoticon_panel_send_type"
     private const val ATTACHED_TAG = 0x51A1E201
     private const val AIO_PARAM_CLASS = "com.tencent.aio.data.AIOParam"
+    private const val AIO_SESSION_CLASS = "com.tencent.aio.data.AIOSession"
+    private const val AIO_CONTACT_CLASS = "com.tencent.aio.data.AIOContact"
     private val sessionsByView = Collections.synchronizedMap(
         WeakHashMap<View, WeakReference<Any>>(),
     )
@@ -159,6 +162,7 @@ object EmoticonButtonHooker : BaseHooker() {
             }
             runCatching {
                 sessionsByView[it]?.get()?.let(ChatImageSender::updateAioParam)
+                ChatImageSender.captureFromContext(it.context)
                 SaveImagePanel.show(
                     host = it.context,
                     actions = panelActions(),
@@ -198,20 +202,24 @@ object EmoticonButtonHooker : BaseHooker() {
         }
 
     private fun hookAioParamConstructors() {
-        val type = runCatching { Class.forName(AIO_PARAM_CLASS, false, appClassLoader) }
-            .onFailure { Log.warn("未找到 AIOParam，图片面板发送功能不可用", it) }
+        hookAioConstructors(AIO_PARAM_CLASS) { ChatImageSender.updateAioParam(instance) }
+        hookAioConstructors(AIO_SESSION_CLASS) { ChatImageSender.captureFrom(instance) }
+        hookAioConstructors(AIO_CONTACT_CLASS) { ChatImageSender.captureFrom(instance) }
+    }
+
+    private fun hookAioConstructors(className: String, onCreated: MethodCall.() -> Unit) {
+        val type = runCatching { Class.forName(className, false, appClassLoader) }
+            .onFailure { Log.warn("未找到 $className，图片面板发送将改从当前页面恢复会话", it) }
             .getOrNull()
             ?: return
         runCatching {
             type.resolve().constructor { }.hookAll {
-                after {
-                    ChatImageSender.updateAioParam(instance)
-                }
+                after(onCreated)
             }
         }.onSuccess {
-            Log.info("已挂钩 AIOParam，会话图片发送已就绪")
+            Log.info("已挂钩 $className，会话图片发送已就绪")
         }.onFailure {
-            Log.warn("挂钩 AIOParam 失败，将尝试从输入栏组件获取会话", it)
+            Log.warn("挂钩 $className 失败，将尝试从输入栏组件获取会话", it)
         }
     }
 

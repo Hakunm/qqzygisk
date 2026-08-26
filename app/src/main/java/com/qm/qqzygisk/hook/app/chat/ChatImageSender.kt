@@ -1,5 +1,8 @@
 package com.qm.qqzygisk.hook.app.chat
 
+import android.app.Activity
+import android.content.Context
+import android.content.ContextWrapper
 import com.qm.qqzygisk.hook.app.data.HostData.appClassLoader
 import com.qm.qqzygisk.hook.utils.Log
 import java.io.File
@@ -8,6 +11,7 @@ import java.lang.reflect.Method
 import java.lang.reflect.Modifier
 import java.lang.reflect.Proxy
 import java.lang.ref.WeakReference
+import java.util.ArrayDeque
 import java.util.ArrayList
 import java.util.Collections
 import java.util.IdentityHashMap
@@ -20,6 +24,7 @@ object ChatImageSender {
     private const val Q_ROUTE_CLASS = "com.tencent.mobileqq.qroute.QRoute"
     private const val MSG_UTIL_API_CLASS = "com.tencent.qqnt.msg.api.IMsgUtilApi"
     private const val MSG_SERVICE_CLASS = "com.tencent.qqnt.msg.api.IMsgService"
+    private val CONTACT_CHAT_TYPES = setOf(1, 2, 4)
     enum class SendType(val subType: Int, val summary: String, val label: String) {
         IMAGE(0, "[图片]", "图片"),
         EMOTICON(1, "[动画表情]", "表情"),
@@ -46,8 +51,30 @@ object ChatImageSender {
     fun updateAioParam(value: Any?) {
         if (value?.javaClass?.name != AIO_PARAM_CLASS) return
         currentAioParam = WeakReference(value)
-        runCatching { lastContact = extractContact(value) }
-            .onFailure { Log.warn("缓存聊天会话失败", it) }
+        rememberContact(value)
+    }
+
+    fun captureFrom(owner: Any?) {
+        if (owner == null) return
+        updateAioParam(owner)
+        rememberContact(owner)
+    }
+
+    fun captureFromContext(context: Context?) {
+        var current: Context? = context
+        while (current != null) {
+            if (current is Activity) {
+                captureFrom(current)
+                current.window?.decorView?.let(::captureFrom)
+                return
+            }
+            current = (current as? ContextWrapper)?.baseContext
+        }
+        captureFromForeground()
+    }
+
+    fun captureFromForeground() {
+        foregroundActivities().forEach(::captureFrom)
     }
 
     /** 发送本地文件。默认按普通图片，type 可选表情。 */
@@ -110,43 +137,112 @@ object ChatImageSender {
     }
 
     private fun resolveContact(): ContactDescriptor {
-        val live = currentAioParam?.get()
-        if (live != null) {
-            runCatching { return extractContact(live).also { lastContact = it } }
-                .onFailure { Log.warn("读取当前会话失败，将使用上次会话", it) }
-        }
+        rememberContact(currentAioParam?.get())
+        lastContact?.let { return it }
+        captureFromForeground()
+        rememberContact(currentAioParam?.get())
         return lastContact ?: error("没有可用的聊天会话，请重新进入聊天页面")
     }
 
-    private fun extractContact(aioParam: Any): ContactDescriptor {
-        val aioSession = readFieldByType(aioParam, loadClass(AIO_SESSION_CLASS))
-            ?: error("当前 AIOParam 中未找到 AIOSession")
-        val aioContact = readFieldByType(aioSession, loadClass(AIO_CONTACT_CLASS))
-            ?: error("当前 AIOSession 中未找到 AIOContact")
+    private fun rememberContact(root: Any?) {
+        if (root == null) return
+        findContact(root)?.let { lastContact = it }
+    }
 
-        val chatTypeFromGetter = invokeNoArg(aioContact, "getChatType") as? Number
-        val namedChatField = listOf("d", "e")
-            .mapNotNull { name -> findField(aioContact.javaClass, name) }
-            .firstOrNull { it.type == Int::class.javaPrimitiveType }
-        val chatType = chatTypeFromGetter?.toInt()
-            ?: (namedChatField?.let { readField(it, aioContact) } as? Number)?.toInt()
-            ?: allFields(aioContact.javaClass)
-                .firstOrNull { it.type == Int::class.javaPrimitiveType }
-                ?.let { readField(it, aioContact) as? Number }
-                ?.toInt()
-            ?: error("无法读取当前会话类型")
+    private fun findContact(root: Any): ContactDescriptor? {
+        val visited = Collections.newSetFromMap(IdentityHashMap<Any, Boolean>())
+        val queue = ArrayDeque<Any>()
+        queue.add(root)
+        var inspected = 0
+        while (queue.isNotEmpty() && inspected < 480) {
+            val current = queue.removeFirst()
+            if (!visited.add(current)) continue
+            inspected++
+            if (current.javaClass.name == AIO_PARAM_CLASS) {
+                currentAioParam = WeakReference(current)
+            }
+            describeContact(current)?.let { return it }
+            allFields(current.javaClass).forEach { field ->
+                if (Modifier.isStatic(field.modifiers) || field.type.isPrimitive) return@forEach
+                val value = readField(field, current) ?: return@forEach
+                if (shouldEnqueue(value)) queue.add(value)
+            }
+        }
+        return null
+    }
 
-        val currentLayout = namedChatField?.name == "d"
-        val peerUid = (invokeNoArg(aioContact, "getPeerUid") as? String)
-            ?: readNamedString(aioContact, if (currentLayout) listOf("e", "f") else listOf("f", "e"))
-            ?: error("无法读取当前会话 UID")
-        val guildId = (invokeNoArg(aioContact, "getGuildId") as? String)
-            ?: readNamedString(aioContact, if (currentLayout) listOf("f", "g") else listOf("g"))
-            .orEmpty()
-
-        check(peerUid.isNotBlank()) { "当前会话 UID 为空" }
+    private fun describeContact(obj: Any): ContactDescriptor? {
+        val typeName = obj.javaClass.name
+        val hasGetters = hasNoArg(obj, "getChatType") && hasNoArg(obj, "getPeerUid")
+        if (!hasGetters && typeName != AIO_CONTACT_CLASS) return null
+        val chatType = (invokeNoArg(obj, "getChatType") as? Number)?.toInt()
+            ?: intFields(obj).firstOrNull { it in CONTACT_CHAT_TYPES }
+            ?: return null
+        val strings = stringFields(obj)
+        val peerUid = (invokeNoArg(obj, "getPeerUid") as? String)
+            ?: strings.firstOrNull(::looksLikePeer)
+            ?: return null
+        if (peerUid.isBlank()) return null
+        val guildId = (invokeNoArg(obj, "getGuildId") as? String)
+            ?: strings.firstOrNull { it != peerUid && it.isNotBlank() }.orEmpty()
         return ContactDescriptor(chatType, peerUid, guildId)
     }
+
+    private fun shouldEnqueue(value: Any): Boolean {
+        val name = value.javaClass.name
+        if (!name.startsWith("com.tencent.") && !name.startsWith("mqq.")) return false
+        return name.contains("aio", ignoreCase = true) ||
+            name.contains("AIO") ||
+            name.contains("Contact") ||
+            name.contains("Session") ||
+            name.startsWith("com.tencent.qqnt.kernel.")
+    }
+
+    private fun looksLikePeer(value: String): Boolean {
+        if (value.startsWith("u_")) return true
+        return value.length >= 5 && value.all { it.isDigit() }
+    }
+
+    private fun hasNoArg(target: Any, name: String): Boolean =
+        generateSequence(target.javaClass) { it.superclass }
+            .flatMap { it.declaredMethods.asSequence() }
+            .any { it.name == name && it.parameterTypes.isEmpty() }
+
+    private fun intFields(target: Any): List<Int> =
+        allFields(target.javaClass)
+            .filter { it.type == Int::class.javaPrimitiveType || it.type == Int::class.java }
+            .mapNotNull { readField(it, target) as? Number }
+            .map { it.toInt() }
+            .toList()
+
+    private fun stringFields(target: Any): List<String> =
+        allFields(target.javaClass)
+            .filter { it.type == String::class.java }
+            .mapNotNull { readField(it, target) as? String }
+            .filter { it.isNotBlank() }
+            .toList()
+
+    private fun foregroundActivities(): List<Activity> {
+        val thread = runCatching {
+            Class.forName("android.app.ActivityThread")
+                .getDeclaredMethod("currentActivityThread")
+                .invoke(null)
+        }.getOrNull() ?: return emptyList()
+        val records = readFieldByName(thread, "mActivities") as? Map<*, *> ?: return emptyList()
+        val resumed = ArrayList<Activity>()
+        val others = ArrayList<Activity>()
+        records.values.forEach { record ->
+            val activity = readFieldByName(record ?: return@forEach, "activity") as? Activity
+                ?: return@forEach
+            if (activity.isFinishing || activity.isDestroyed) return@forEach
+            val paused = readFieldByName(record, "paused") as? Boolean ?: false
+            if (!paused) resumed.add(activity) else others.add(activity)
+        }
+        return resumed + others
+    }
+
+    private fun readFieldByName(target: Any, name: String): Any? =
+        findField(target.javaClass, name)?.let { readField(it, target) }
 
     private fun createPicElement(
         apiType: Class<*>,
@@ -251,12 +347,6 @@ object ChatImageSender {
         allFields(target.javaClass)
             .firstOrNull { type.isAssignableFrom(it.type) }
             ?.let { readField(it, target) }
-
-    private fun readNamedString(target: Any, names: List<String>): String? =
-        names.asSequence()
-            .mapNotNull { findField(target.javaClass, it) }
-            .filter { it.type == String::class.java }
-            .firstNotNullOfOrNull { readField(it, target) as? String }
 
     private fun invokeNoArg(target: Any, name: String): Any? {
         val method = generateSequence(target.javaClass) { it.superclass }

@@ -23,10 +23,13 @@ object ImageFolderStore {
         "/storage/self/primary/Android/media/com.tencent.mobileqq/TGStickersExported/v1"
     val ROOT_PATH: String
         get() = configuredPath(QQ_ZYGISK_PATH_KEY, DEFAULT_QQ_ZYGISK_PATH)
+    val IMPORT_ROOTS: List<String>
+        get() = listOf(
+            configuredPath(FUNBOX_PATH_KEY, DEFAULT_FUNBOX_PATH),
+            configuredPath(TG_STICKERS_PATH_KEY, DEFAULT_TG_STICKERS_PATH),
+        ).distinct()
     val SCAN_ROOTS: List<String>
         get() = buildList {
-            add(configuredPath(FUNBOX_PATH_KEY, DEFAULT_FUNBOX_PATH))
-            add(configuredPath(TG_STICKERS_PATH_KEY, DEFAULT_TG_STICKERS_PATH))
             add(ROOT_PATH)
             val legacy = File(LEGACY_LOCAL_PATH)
             if (legacy.isDirectory && LEGACY_LOCAL_PATH != ROOT_PATH) {
@@ -38,6 +41,8 @@ object ImageFolderStore {
     private const val LAST_FOLDER_FILE = ".last_folder"
     private const val LAST_FOLDER_KEY = "emoticon_panel_last_folder"
     private const val USAGE_FILE = ".usage.json"
+    private const val IMPORT_INDEX_FILE = ".import_index.json"
+    private val importLock = Any()
     const val HISTORY_DIR_NAME = "__history__"
     private const val HISTORY_LIMIT = 80
     private val usageLock = Any()
@@ -67,15 +72,9 @@ object ImageFolderStore {
     fun isHistoryFolder(folder: File): Boolean = folder.name == HISTORY_DIR_NAME
 
     fun folders(includeExternal: Boolean = false): List<File> {
+        importExternalIfNeeded()
         val owned = listChildFolders(root())
-        val extra = if (includeExternal) {
-            SCAN_ROOTS
-                .filter { it != ROOT_PATH }
-                .flatMap { listChildFolders(File(it)) }
-        } else {
-            emptyList()
-        }
-        val real = (owned + extra)
+        val real = owned
             .distinctBy { it.absolutePath }
             .filter { !isHistoryFolder(it) }
             .sortedWith(
@@ -83,6 +82,42 @@ object ImageFolderStore {
                     .thenBy { displayName(it).lowercase() },
             )
         return if (includeExternal) listOf(historyFolder()) + real else real
+    }
+
+    fun isLocalEmoticon(file: File): Boolean {
+        if (!file.isFile || !isImageFile(file)) return false
+        val path = file.absolutePath
+        return (SCAN_ROOTS + IMPORT_ROOTS).any { root ->
+            path == root || path.startsWith("$root/")
+        }
+    }
+
+    fun importExternalIfNeeded(force: Boolean = false): Int {
+        synchronized(importLock) {
+            val index = loadImportIndex()
+            var imported = 0
+            var changed = false
+            IMPORT_ROOTS.forEach { sourceRoot ->
+                listChildFolders(File(sourceRoot)).forEach { source ->
+                    if (isOwned(source) || isHistoryFolder(source)) return@forEach
+                    val images = images(source)
+                    if (images.isEmpty()) return@forEach
+                    val stamp = sourceStamp(source, images)
+                    val previous = index[source.absolutePath]
+                    if (!force && previous?.stamp == stamp) return@forEach
+                    val dest = ownedFolderFor(source, previous?.destName)
+                    val copied = copyImages(images, dest)
+                    imported += copied
+                    index[source.absolutePath] = ImportRecord(dest.name, stamp)
+                    changed = true
+                }
+            }
+            if (changed) {
+                saveImportIndex(index)
+                notifyChanged()
+            }
+            return imported
+        }
     }
 
     fun images(folder: File): List<File> {
@@ -185,6 +220,70 @@ object ImageFolderStore {
             saveUsageLocked(store)
         }
         notifyChanged()
+    }
+
+    private fun ownedFolderFor(source: File, previousName: String?): File {
+        val preferred = previousName
+            ?.takeIf { it.isNotBlank() && it != HISTORY_DIR_NAME }
+            ?: displayName(source)
+        val name = sanitizeName(preferred).ifEmpty { sanitizeName(source.name) }
+        check(name.isNotEmpty() && name != HISTORY_DIR_NAME) { "导入文件夹名无效" }
+        val folder = File(root(), name)
+        if (!folder.exists()) {
+            check(folder.mkdirs()) { "无法创建收藏夹: $name" }
+        }
+        return folder
+    }
+
+    private fun copyImages(images: List<File>, dest: File): Int {
+        ensureFolder(dest)
+        var copied = 0
+        images.forEach { source ->
+            val bytes = runCatching { source.readBytes() }.getOrNull() ?: return@forEach
+            val file = File(dest, "${md5(bytes)}.${normalizeExtension(source.extension)}")
+            if (file.exists()) return@forEach
+            file.writeBytes(bytes)
+            copied += 1
+        }
+        return copied
+    }
+
+    private fun sourceStamp(folder: File, images: List<File>): String {
+        val newest = images.maxOfOrNull { it.lastModified() } ?: folder.lastModified()
+        return "${images.size}:$newest"
+    }
+
+    private fun loadImportIndex(): MutableMap<String, ImportRecord> {
+        val file = File(root(), IMPORT_INDEX_FILE)
+        if (!file.isFile) return mutableMapOf()
+        return runCatching {
+            val json = JSONObject(file.readText())
+            val result = mutableMapOf<String, ImportRecord>()
+            json.keys().forEach { key ->
+                val item = json.optJSONObject(key) ?: return@forEach
+                val destName = item.optString("dest").trim()
+                val stamp = item.optString("stamp").trim()
+                if (destName.isNotEmpty() && stamp.isNotEmpty()) {
+                    result[key] = ImportRecord(destName, stamp)
+                }
+            }
+            result
+        }.getOrDefault(mutableMapOf())
+    }
+
+    private fun saveImportIndex(index: Map<String, ImportRecord>) {
+        val json = JSONObject()
+        index.forEach { (source, record) ->
+            json.put(
+                source,
+                JSONObject()
+                    .put("dest", record.destName)
+                    .put("stamp", record.stamp),
+            )
+        }
+        val file = File(root(), IMPORT_INDEX_FILE)
+        file.parentFile?.mkdirs()
+        file.writeText(json.toString())
     }
 
     private fun configuredPath(key: String, defaultValue: String): String =
@@ -352,6 +451,8 @@ object ImageFolderStore {
         val files: MutableMap<String, UsageEntry> = mutableMapOf(),
         val folders: MutableMap<String, UsageEntry> = mutableMapOf(),
     )
+
+    private data class ImportRecord(val destName: String, val stamp: String)
 
     private data class FunBoxNameCache(
         val path: String = "",

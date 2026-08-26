@@ -131,7 +131,7 @@ private fun MainSettings(
                     color = MaterialTheme.colorScheme.onSurface,
                 )
                 Text(
-                    text = "本地图片、FunBox、TGStickersExported",
+                    text = "FunBox / TG 导入到本地可写收藏夹",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -186,9 +186,24 @@ private fun ColumnScope.PathSettings() {
     var savedQqZygiskPath by remember { mutableStateOf(qqZygiskPath) }
     var savedFunBoxPath by remember { mutableStateOf(funBoxPath) }
     var savedTgStickersPath by remember { mutableStateOf(tgStickersPath) }
+    var importHint by remember { mutableStateOf("") }
     val hasChanges = qqZygiskPath != savedQqZygiskPath ||
         funBoxPath != savedFunBoxPath ||
         tgStickersPath != savedTgStickersPath
+
+    fun persistPaths() {
+        qqZygiskPath = qqZygiskPath.trim()
+            .ifEmpty { ImageFolderStore.DEFAULT_QQ_ZYGISK_PATH }
+        funBoxPath = funBoxPath.trim().ifEmpty { ImageFolderStore.DEFAULT_FUNBOX_PATH }
+        tgStickersPath = tgStickersPath.trim()
+            .ifEmpty { ImageFolderStore.DEFAULT_TG_STICKERS_PATH }
+        HookSettings.setString(ImageFolderStore.QQ_ZYGISK_PATH_KEY, qqZygiskPath)
+        HookSettings.setString(ImageFolderStore.FUNBOX_PATH_KEY, funBoxPath)
+        HookSettings.setString(ImageFolderStore.TG_STICKERS_PATH_KEY, tgStickersPath)
+        savedQqZygiskPath = qqZygiskPath
+        savedFunBoxPath = funBoxPath
+        savedTgStickersPath = tgStickersPath
+    }
 
     Spacer(modifier = Modifier.height(20.dp))
     OutlinedTextField(
@@ -218,24 +233,37 @@ private fun ColumnScope.PathSettings() {
         maxLines = 3,
     )
     Spacer(modifier = Modifier.height(12.dp))
+    Text(
+        text = "FunBox 和 TG 会导入成本地可写收藏夹，不再分成只读和可写两套目录。",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+    Spacer(modifier = Modifier.height(12.dp))
     Button(
-        onClick = {
-            qqZygiskPath = qqZygiskPath.trim()
-                .ifEmpty { ImageFolderStore.DEFAULT_QQ_ZYGISK_PATH }
-            funBoxPath = funBoxPath.trim().ifEmpty { ImageFolderStore.DEFAULT_FUNBOX_PATH }
-            tgStickersPath = tgStickersPath.trim()
-                .ifEmpty { ImageFolderStore.DEFAULT_TG_STICKERS_PATH }
-            HookSettings.setString(ImageFolderStore.QQ_ZYGISK_PATH_KEY, qqZygiskPath)
-            HookSettings.setString(ImageFolderStore.FUNBOX_PATH_KEY, funBoxPath)
-            HookSettings.setString(ImageFolderStore.TG_STICKERS_PATH_KEY, tgStickersPath)
-            savedQqZygiskPath = qqZygiskPath
-            savedFunBoxPath = funBoxPath
-            savedTgStickersPath = tgStickersPath
-        },
+        onClick = { persistPaths() },
         modifier = Modifier.align(Alignment.End),
         enabled = hasChanges,
     ) {
         Text("保存路径")
+    }
+    Spacer(modifier = Modifier.height(12.dp))
+    Button(
+        onClick = {
+            persistPaths()
+            val copied = ImageFolderStore.importExternalIfNeeded(force = true)
+            importHint = if (copied > 0) "已导入 $copied 张表情" else "没有新的表情需要导入"
+        },
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Text("导入到可写收藏夹")
+    }
+    if (importHint.isNotEmpty()) {
+        Spacer(modifier = Modifier.height(8.dp))
+        Text(
+            text = importHint,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
     Spacer(modifier = Modifier.height(24.dp))
 }

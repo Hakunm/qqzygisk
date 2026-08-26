@@ -997,6 +997,7 @@ class SaveImagePanel private constructor(
                 "图片操作 ID 不能重复"
             }
             host.injectModuleAppResources()
+            ChatImageSender.captureFromContext(host)
             val moduleLoader = SaveImagePanel::class.java.classLoader ?: host.classLoader
             val themed = object : ContextThemeWrapper(host, R.style.Theme_QHook_MaterialDialog) {
                 override fun getClassLoader(): ClassLoader = moduleLoader

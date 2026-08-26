@@ -137,12 +137,7 @@ class LocalDocumentEmoticonProvider : ExtraEmoticonProvider() {
     override fun extraEmoticonList(): List<ExtraEmoticonPanel> {
         val panels = mutableListOf<ExtraEmoticonPanel>()
         val seen = mutableSetOf<String>()
-        val dirs = mutableListOf<File>()
-        for (baseDir in ImageFolderStore.SCAN_ROOTS) {
-            File(baseDir).listFiles()?.forEach { dirs.add(it) }
-        }
-        dirs.addAll(ImageFolderStore.folders())
-        for (dir in dirs) {
+        for (dir in ImageFolderStore.folders()) {
             val path = dir.absolutePath
             if (!seen.add(path)) continue
             if (ImageFolderStore.isHistoryFolder(dir)) continue

@@ -1,11 +1,13 @@
 package com.qm.qqzygisk.hook.app.hooker
 
+import android.content.Context
 import android.graphics.drawable.Drawable
 import android.widget.ImageView
 import android.widget.RelativeLayout
 import com.highcapable.kavaref.KavaRef.Companion.asResolver
 import com.highcapable.kavaref.KavaRef.Companion.resolve
 import com.qm.qqzygisk.hook.app.base.BaseHooker
+import com.qm.qqzygisk.hook.app.chat.ChatImageSender
 import com.qm.qqzygisk.hook.app.chat.ImageFolderStore
 import com.qm.qqzygisk.hook.app.data.HostData.toAppClass
 import com.qm.qqzygisk.hook.extension.MethodCall
@@ -246,6 +248,24 @@ object EmoticonPanelHooker : BaseHooker() {
             .resolve()
             .method { name = "send" }
             .hookAll {
+                before {
+                    if (!enabled) return@before
+                    val path = instance.get<String>("path") ?: return@before
+                    val file = File(path)
+                    if (!ImageFolderStore.isLocalEmoticon(file)) return@before
+                    args.forEach { arg ->
+                        ChatImageSender.captureFrom(arg)
+                        if (arg is Context) ChatImageSender.captureFromContext(arg)
+                    }
+                    ChatImageSender.captureFrom(instance)
+                    val sent = ChatImageSender.sendImage(file, ChatImageSender.SendType.EMOTICON)
+                    if (sent.isSuccess) {
+                        ImageFolderStore.recordUsage(file)
+                        result = null
+                    } else {
+                        Log.warn("内置表情改走本地发送失败，回退 QQ 原发送", sent.exceptionOrNull())
+                    }
+                }
                 after {
                     if (!enabled) return@after
                     val path = instance.get<String>("path") ?: return@after
