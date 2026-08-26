@@ -24,7 +24,7 @@ zygisk {
     entrypoint = "com.qm.qqzygisk.Main"
     archiveName = "qqhook"
     dir = "adb/qqhook"
-    updateJson = "https://raw.githubusercontent.com/Night-stars-1/qqzygisk/master/update.json"
+    updateJson = "https://raw.githubusercontent.com/Hakunm/qqzygisk/master/update.json"
 }
 
 android {
@@ -225,6 +225,7 @@ tasks.register("MagiskZipTask") {
         File(layout.projectDirectory.asFile, "src/main/resources/uninstall.sh").copyTo(File(tempDir, "uninstall.sh"), overwrite = true)
         normalizeShellLineEndings(tempDir)
         zipDirectory(tempDir, zipFile)
+        zipFile.copyTo(rootProject.layout.projectDirectory.file("qqhook.zip").asFile, overwrite = true)
         tempDir.deleteOnExit()
     }
 }

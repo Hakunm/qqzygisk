@@ -71,8 +71,8 @@ jobs:
           {
             "version": "${version_name:-$TAG}",
             "versionCode": ${version_code:-0},
-            "zipUrl": "https://github.com/${REPO}/releases/download/${TAG}/qqhook.zip",
-            "changelog": "https://raw.githubusercontent.com/${REPO}/${TAG}/changelog.md"
+            "zipUrl": "https://raw.githubusercontent.com/${REPO}/master/qqhook.zip",
+            "changelog": "https://raw.githubusercontent.com/${REPO}/master/changelog.md"
           }
           EOF
           cp changelog.md dist/changelog.md
