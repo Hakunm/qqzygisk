@@ -147,7 +147,7 @@ class LocalDocumentEmoticonProvider : ExtraEmoticonProvider() {
                 panels.add(existing)
                 continue
             }
-            val hasImages = ImageFolderStore.images(dir).isNotEmpty() || listFile(path).isNotEmpty()
+            val hasImages = ImageFolderStore.hasImages(dir)
             if (!hasImages) continue
             val panel = Panel(path, dir.name)
             panelsMap[path] = panel

@@ -7,6 +7,7 @@ import com.highcapable.kavaref.KavaRef.Companion.resolve
 import com.qm.qqzygisk.hook.app.base.SettingData
 import com.qm.qqzygisk.hook.app.data.HostData
 import com.qm.qqzygisk.hook.app.data.HostData.toAppClass
+import com.qm.qqzygisk.hook.app.chat.ImageFolderStore
 import com.qm.qqzygisk.hook.app.chat.NtImageRkeyProvider
 import com.qm.qqzygisk.hook.app.detect.AntiDetect
 import com.qm.qqzygisk.hook.app.hooker.AntiRevokeHooker
@@ -65,6 +66,7 @@ object QQEntry {
                 ChatMenuHooker.load()
                 AntiRevokeHooker.retry()
                 RepeaterHooker.retry()
+                ImageFolderStore.scheduleImport()
             }
         }
         val hooks =

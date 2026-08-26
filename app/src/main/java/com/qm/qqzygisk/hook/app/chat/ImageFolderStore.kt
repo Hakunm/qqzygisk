@@ -1,15 +1,20 @@
 package com.qm.qqzygisk.hook.app.chat
 
 import com.qm.qqzygisk.hook.utils.HookSettings
+import com.qm.qqzygisk.hook.utils.Log
 import org.json.JSONObject
 import java.io.File
 import java.security.MessageDigest
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * 聊天长按保存图片的本地目录。
  * 子文件夹会作为表情面板分组，第一张图默认当封面。
- * 浏览时还会带上模块内置贴纸目录。
+ *
+ * 打开面板只读本地 `.qhook` 目录；FunBox / TG 导入放到后台，避免主线程卡顿。
  */
 object ImageFolderStore {
     const val QQ_ZYGISK_PATH_KEY = "qq_zygisk_image_path"
@@ -42,6 +47,7 @@ object ImageFolderStore {
     private const val LAST_FOLDER_KEY = "emoticon_panel_last_folder"
     private const val USAGE_FILE = ".usage.json"
     private const val IMPORT_INDEX_FILE = ".import_index.json"
+    private const val IMPORT_CHECK_INTERVAL_MS = 30_000L
     private val importLock = Any()
     const val HISTORY_DIR_NAME = "__history__"
     private const val HISTORY_LIMIT = 80
@@ -53,12 +59,26 @@ object ImageFolderStore {
     private val imageExtensions = setOf("png", "jpg", "jpeg", "gif", "webp")
     @Volatile
     private var funBoxNameCache = FunBoxNameCache()
+    @Volatile
+    private var ownedFolderCache: CachedFolders? = null
+    private val imageListCache = ConcurrentHashMap<String, CachedImages>()
+    @Volatile
+    private var lastImportCheckAt = 0L
+    private val importRunning = AtomicBoolean(false)
+    private val importExecutor = Executors.newSingleThreadExecutor { task ->
+        Thread(task, "qh-import").apply { isDaemon = true }
+    }
 
     fun addListener(listener: () -> Unit) {
         listeners.add(listener)
     }
 
+    fun removeListener(listener: () -> Unit) {
+        listeners.remove(listener)
+    }
+
     private fun notifyChanged() {
+        invalidateListingCaches()
         listeners.forEach { it() }
     }
 
@@ -72,16 +92,24 @@ object ImageFolderStore {
     fun isHistoryFolder(folder: File): Boolean = folder.name == HISTORY_DIR_NAME
 
     fun folders(includeExternal: Boolean = false): List<File> {
-        importExternalIfNeeded()
-        val owned = listChildFolders(root())
-        val real = owned
-            .distinctBy { it.absolutePath }
-            .filter { !isHistoryFolder(it) }
-            .sortedWith(
-                compareByDescending<File> { folderUsage(it) }
-                    .thenBy { displayName(it).lowercase() },
-            )
-        return if (includeExternal) listOf(historyFolder()) + real else real
+        val owned = cachedOwnedFolders()
+        return if (includeExternal) listOf(historyFolder()) + owned else owned
+    }
+
+    fun scheduleImport() {
+        if (!importRunning.compareAndSet(false, true)) return
+        importExecutor.execute {
+            try {
+                val copied = importExternalIfNeeded(force = false)
+                if (copied > 0) {
+                    Log.info("background imported $copied stickers")
+                }
+            } catch (error: Throwable) {
+                Log.warn("background import failed", error)
+            } finally {
+                importRunning.set(false)
+            }
+        }
     }
 
     fun isLocalEmoticon(file: File): Boolean {
@@ -94,19 +122,26 @@ object ImageFolderStore {
 
     fun importExternalIfNeeded(force: Boolean = false): Int {
         synchronized(importLock) {
+            val now = System.currentTimeMillis()
+            if (!force && now - lastImportCheckAt < IMPORT_CHECK_INTERVAL_MS) return 0
+            lastImportCheckAt = now
             val index = loadImportIndex()
             var imported = 0
             var changed = false
             IMPORT_ROOTS.forEach { sourceRoot ->
                 listChildFolders(File(sourceRoot)).forEach { source ->
                     if (isOwned(source) || isHistoryFolder(source)) return@forEach
-                    val images = images(source)
-                    if (images.isEmpty()) return@forEach
-                    val stamp = sourceStamp(source, images)
+                    val stamp = cheapStamp(source)
+                    if (stamp.startsWith("0:")) return@forEach
                     val previous = index[source.absolutePath]
                     if (!force && previous?.stamp == stamp) return@forEach
                     val dest = ownedFolderFor(source, previous?.destName)
-                    val copied = copyImages(images, dest)
+                    if (!force && previous != null && imageNameCount(dest) >= stampCount(stamp)) {
+                        index[source.absolutePath] = ImportRecord(dest.name, stamp)
+                        changed = true
+                        return@forEach
+                    }
+                    val copied = copyImages(listImageFiles(source), dest)
                     imported += copied
                     index[source.absolutePath] = ImportRecord(dest.name, stamp)
                     changed = true
@@ -122,18 +157,25 @@ object ImageFolderStore {
 
     fun images(folder: File): List<File> {
         if (isHistoryFolder(folder)) return historyImages()
-        return folder.listFiles()
-            ?.filter { it.isFile && isImageFile(it) }
-            ?.sortedByDescending { it.lastModified() }
-            ?: emptyList()
+        val stamp = listingStamp(folder)
+        imageListCache[folder.absolutePath]?.let { cached ->
+            if (cached.stamp == stamp) return cached.files
+        }
+        val files = listImageFiles(folder).sortedByDescending { it.lastModified() }
+        imageListCache[folder.absolutePath] = CachedImages(stamp, files)
+        return files
+    }
+
+    fun hasImages(folder: File): Boolean {
+        if (isHistoryFolder(folder)) return historyImages().isNotEmpty()
+        imageListCache[folder.absolutePath]?.let { return it.files.isNotEmpty() }
+        val names = folder.list() ?: return false
+        return names.any(::isImageName)
     }
 
     fun coverFile(folder: File): File? {
         if (isHistoryFolder(folder)) return historyImages().firstOrNull()
-        return folder.listFiles()
-            ?.asSequence()
-            ?.filter { it.isFile && isImageFile(it) }
-            ?.minByOrNull { it.lastModified() }
+        return images(folder).lastOrNull()
     }
 
     fun displayName(folder: File): String {
@@ -164,8 +206,11 @@ object ImageFolderStore {
         }
     }
 
-    fun lastFolder(includeExternal: Boolean = false): File? {
-        val available = folders(includeExternal)
+    fun lastFolder(includeExternal: Boolean = false): File? =
+        matchSavedFolder(folders(includeExternal))
+
+    fun matchSavedFolder(available: List<File>): File? {
+        if (available.isEmpty()) return null
         val saved = HookSettings.getString(LAST_FOLDER_KEY, "").ifBlank {
             File(root(), LAST_FOLDER_FILE)
                 .takeIf { it.isFile }
@@ -173,10 +218,10 @@ object ImageFolderStore {
                 ?.trim()
                 .orEmpty()
         }
-        if (saved.isEmpty()) return available.firstOrNull()
+        if (saved.isEmpty()) return available.first()
         return available.firstOrNull { it.absolutePath == saved }
             ?: available.firstOrNull { it.name == saved }
-            ?: available.firstOrNull()
+            ?: available.first()
     }
 
     fun remember(folder: File) {
@@ -222,6 +267,54 @@ object ImageFolderStore {
         notifyChanged()
     }
 
+    private fun cachedOwnedFolders(): List<File> {
+        val root = root()
+        val stamp = listingStamp(root)
+        ownedFolderCache?.let { cached ->
+            if (cached.path == root.absolutePath && cached.stamp == stamp) {
+                return cached.folders
+            }
+        }
+        val folders = listChildFolders(root)
+            .distinctBy { it.absolutePath }
+            .filter { !isHistoryFolder(it) }
+            .sortedWith(
+                compareByDescending<File> { folderUsage(it) }
+                    .thenBy { it.name.lowercase() },
+            )
+        ownedFolderCache = CachedFolders(root.absolutePath, stamp, folders)
+        return folders
+    }
+
+    private fun invalidateListingCaches() {
+        ownedFolderCache = null
+        imageListCache.clear()
+    }
+
+    private fun listingStamp(folder: File): String {
+        val names = folder.list() ?: emptyArray()
+        return "${names.size}:${folder.lastModified()}"
+    }
+
+    private fun cheapStamp(folder: File): String {
+        val names = folder.list() ?: emptyArray()
+        val count = names.count(::isImageName)
+        return "$count:${folder.lastModified()}"
+    }
+
+    private fun stampCount(stamp: String): Int =
+        stamp.substringBefore(':').toIntOrNull() ?: 0
+
+    private fun imageNameCount(folder: File): Int =
+        folder.list()?.count(::isImageName) ?: 0
+
+    private fun listImageFiles(folder: File): List<File> {
+        val names = folder.list() ?: return emptyList()
+        return names.mapNotNull { name ->
+            if (isImageName(name)) File(folder, name) else null
+        }
+    }
+
     private fun ownedFolderFor(source: File, previousName: String?): File {
         val preferred = previousName
             ?.takeIf { it.isNotBlank() && it != HISTORY_DIR_NAME }
@@ -237,20 +330,28 @@ object ImageFolderStore {
 
     private fun copyImages(images: List<File>, dest: File): Int {
         ensureFolder(dest)
+        val existing = dest.listFiles()?.filter(::isImageFile).orEmpty()
+        if (existing.size >= images.size) return 0
+        val existingNames = existing.mapTo(HashSet()) { it.name }
+        val existingSizes = existing.mapTo(HashSet()) { it.length() }
         var copied = 0
         images.forEach { source ->
-            val bytes = runCatching { source.readBytes() }.getOrNull() ?: return@forEach
-            val file = File(dest, "${md5(bytes)}.${normalizeExtension(source.extension)}")
-            if (file.exists()) return@forEach
-            file.writeBytes(bytes)
-            copied += 1
+            val destName = destImageName(source)
+            if (destName in existingNames || source.length() in existingSizes) return@forEach
+            val destFile = File(dest, destName)
+            if (runCatching { source.copyTo(destFile, overwrite = false) }.isSuccess) {
+                existingNames.add(destName)
+                existingSizes.add(source.length())
+                copied += 1
+            }
         }
         return copied
     }
 
-    private fun sourceStamp(folder: File, images: List<File>): String {
-        val newest = images.maxOfOrNull { it.lastModified() } ?: folder.lastModified()
-        return "${images.size}:$newest"
+    private fun destImageName(source: File): String {
+        val ext = normalizeExtension(source.extension)
+        val base = sanitizeName(source.nameWithoutExtension).ifEmpty { "sticker" }
+        return "${source.length()}_${base}.$ext"
     }
 
     private fun loadImportIndex(): MutableMap<String, ImportRecord> {
@@ -289,11 +390,14 @@ object ImageFolderStore {
     private fun configuredPath(key: String, defaultValue: String): String =
         HookSettings.getString(key, defaultValue).trim().ifEmpty { defaultValue }
 
-    private fun listChildFolders(dir: File): List<File> =
-        dir.listFiles()
-            ?.filter { it.isDirectory && !it.name.startsWith(".") && it.name != HISTORY_DIR_NAME }
-            .orEmpty()
-            .toList()
+    private fun listChildFolders(dir: File): List<File> {
+        val names = dir.list() ?: return emptyList()
+        return names.mapNotNull { name ->
+            if (name.startsWith(".") || name == HISTORY_DIR_NAME) return@mapNotNull null
+            val child = File(dir, name)
+            if (child.isDirectory) child else null
+        }
+    }
 
     private fun historyImages(): List<File> {
         val entries = synchronized(usageLock) { loadUsageLocked().files.entries.toList() }
@@ -404,20 +508,21 @@ object ImageFolderStore {
         val stickerRoot = File(storagePath).parentFile ?: return null
         val direct = File(stickerRoot, "packs")
         if (direct.isFile) return direct
-        return stickerRoot.listFiles()
+        return stickerRoot.list()
             ?.asSequence()
+            ?.map { File(stickerRoot, it) }
             ?.filter(File::isDirectory)
             ?.map { File(it, "packs") }
             ?.firstOrNull(File::isFile)
     }
 
-    private fun isImageFile(file: File): Boolean {
-        val name = file.name
+    private fun isImageFile(file: File): Boolean = file.isFile && isImageName(file.name)
+
+    private fun isImageName(name: String): Boolean {
         if (name.startsWith(".") || name.startsWith("__cover__.") || name.endsWith(".txt.jpg")) {
             return false
         }
-        val ext = file.extension.lowercase()
-        return ext.isEmpty() || ext in imageExtensions
+        return name.substringAfterLast('.', "").lowercase() in imageExtensions
     }
 
     private fun ensureFolder(folder: File) {
@@ -453,6 +558,17 @@ object ImageFolderStore {
     )
 
     private data class ImportRecord(val destName: String, val stamp: String)
+
+    private data class CachedFolders(
+        val path: String,
+        val stamp: String,
+        val folders: List<File>,
+    )
+
+    private data class CachedImages(
+        val stamp: String,
+        val files: List<File>,
+    )
 
     private data class FunBoxNameCache(
         val path: String = "",

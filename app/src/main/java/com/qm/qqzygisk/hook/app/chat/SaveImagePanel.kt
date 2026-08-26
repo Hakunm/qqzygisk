@@ -98,15 +98,23 @@ class SaveImagePanel private constructor(
     @Volatile
     private var closed = false
     private val browseOnly get() = imageUrls.isEmpty()
+    private val storeListener: () -> Unit = {
+        panelDialog?.window?.decorView?.post {
+            if (!closed) bindFolders()
+        }
+    }
 
     fun show() {
         val dialog = Dialog(context, android.R.style.Theme_Translucent_NoTitleBar)
         panelDialog = dialog
         dialog.setContentView(buildContent(dialog))
         dialog.setCanceledOnTouchOutside(true)
+        ImageFolderStore.addListener(storeListener)
+        ImageFolderStore.scheduleImport()
         dialog.setOnDismissListener {
             closed = true
             imageGeneration++
+            ImageFolderStore.removeListener(storeListener)
             thumbnailExecutor.shutdownNow()
             folderCoverExecutor.shutdownNow()
             thumbnailRequests.clear()
@@ -371,7 +379,7 @@ class SaveImagePanel private constructor(
             return
         }
         if (selected[0] == null || folders.none { it.absolutePath == selected[0]?.absolutePath }) {
-            selected[0] = ImageFolderStore.lastFolder(includeExternal = browseOnly) ?: folders.first()
+            selected[0] = ImageFolderStore.matchSavedFolder(folders) ?: folders.first()
         }
         if (browseOnly) {
             titleView.text = selected[0]?.let(ImageFolderStore::displayName) ?: "图片面板"
@@ -456,10 +464,25 @@ class SaveImagePanel private constructor(
         val hint = emptyHint ?: return
         val generation = ++imageGeneration
         grid.adapter = null
-        val files = folder?.let(ImageFolderStore::images).orEmpty()
-        hint.visibility = if (files.isEmpty()) View.VISIBLE else View.GONE
-        if (files.isEmpty()) return
+        hint.visibility = View.GONE
+        if (folder == null) {
+            hint.visibility = View.VISIBLE
+            return
+        }
+        runCatching {
+            folderCoverExecutor.execute {
+                val files = ImageFolderStore.images(folder)
+                grid.post {
+                    if (closed || generation != imageGeneration) return@post
+                    hint.visibility = if (files.isEmpty()) View.VISIBLE else View.GONE
+                    if (files.isEmpty()) return@post
+                    showImageGrid(grid, files, generation)
+                }
+            }
+        }
+    }
 
+    private fun showImageGrid(grid: GridView, files: List<File>, generation: Int) {
         val fill = fill@{
             if (closed || generation != imageGeneration) return@fill
             val gap = context.dp(IMAGE_GAP)
