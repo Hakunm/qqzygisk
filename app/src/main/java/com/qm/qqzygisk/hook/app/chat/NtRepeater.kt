@@ -14,18 +14,15 @@ import java.util.HashMap
 internal object NtRepeater {
     /** QAuxiliary MsgConstants.MSG_TYPE_WALLET */
     private const val MSG_TYPE_WALLET = 10
-    private const val MSG_TYPE_GRAY_TIPS = 5
 
     fun isRepeatable(msg: Any?): Boolean {
         if (msg == null) return false
-        val record = msgRecord(msg) ?: return true
-        val msgType = NtMsgAccess.asInt(NtMsgAccess.read(record, "getMsgType", "msgType"))
-        if (msgType == MSG_TYPE_WALLET || msgType == MSG_TYPE_GRAY_TIPS) return false
-        if (NtMsgAccess.invokeNoArg(record, "getWalletElement") != null) return false
-        val elements = NtMsgAccess.read(record, "getElements", "elements") as? List<*> ?: return true
-        return elements.none { element ->
-            element != null && NtMsgAccess.invokeNoArg(element, "getWalletElement") != null
-        }
+        return runCatching {
+            val record = msgRecord(msg) ?: return false
+            val msgType = NtMsgAccess.asInt(NtMsgAccess.read(record, "getMsgType", "msgType"))
+            msgType != MSG_TYPE_WALLET
+        }.onFailure { Log.warn("repeat-plus isRepeatable failed", it) }
+            .getOrDefault(false)
     }
 
     fun repeat(msg: Any?, onError: (String) -> Unit) {
@@ -46,7 +43,9 @@ internal object NtRepeater {
 
     private fun repeatByForwardNt(msg: Any, onError: (String) -> Unit) {
         val recordHint = msgRecord(msg)
-        val descriptor = contactFrom(recordHint) ?: ChatImageSender.currentContactOrNull()
+        val descriptor = ChatImageSender.contactFromCurrentAioParam()
+            ?: contactFrom(recordHint)
+            ?: ChatImageSender.currentContactOrNull()
         if (descriptor == null) {
             onError("没有可用的聊天会话，请重新进入聊天页面")
             return
@@ -137,9 +136,10 @@ internal object NtRepeater {
         Log.info("repeat-plus sent elements=${elements.size}")
     }
 
+    /** QAuxiliary：只看第一条 element 的 pic / marketFace / struct / ark。 */
     private fun shouldForward(record: Any): Boolean {
         val first = elementsOf(record).firstOrNull() ?: return false
-        return hasMediaElement(first) || hasMediaElement(record)
+        return hasMediaElement(first)
     }
 
     private fun hasMediaElement(target: Any): Boolean =
@@ -178,7 +178,7 @@ internal object NtRepeater {
             ?: record?.let { NtMsgAccess.asLong(NtMsgAccess.read(it, "getMsgId", "msgId")) }
 
     private fun nextUniqueId(service: Any, chatType: Int): Long {
-        val time = System.currentTimeMillis()
+        val time = NtMsgAccess.serviceTimeMillis()
         findMethod(service, "generateMsgUniqueId") { true }?.let { method ->
             method.isAccessible = true
             val types = method.parameterTypes

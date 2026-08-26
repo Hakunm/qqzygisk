@@ -60,6 +60,19 @@ internal object NtMsgAccess {
     fun loadClass(name: String): Class<*>? =
         runCatching { Class.forName(name, false, appClassLoader) }.getOrNull()
 
+    /** QAuxiliary QAppUtils.getServiceTime → NetConnInfoCenter.getServerTimeMillis */
+    fun serviceTimeMillis(): Long {
+        val type = loadClass("com.tencent.mobileqq.msf.core.NetConnInfoCenter")
+        val method = type?.methods?.firstOrNull { candidate ->
+            candidate.name == "getServerTimeMillis" && candidate.parameterCount == 0
+        }
+        if (method != null) {
+            method.isAccessible = true
+            asLong(runCatching { method.invoke(null) }.getOrNull())?.takeIf { it > 0L }?.let { return it }
+        }
+        return System.currentTimeMillis()
+    }
+
     fun loadFirst(vararg names: String): Class<*>? =
         names.firstNotNullOfOrNull { loadClass(it) }
 

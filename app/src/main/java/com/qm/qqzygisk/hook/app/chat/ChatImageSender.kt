@@ -85,6 +85,23 @@ object ChatImageSender {
         return lastContact
     }
 
+    /**
+     * QAuxiliary [cc.hicore.message.chat.SessionUtils.AIOParam2Contact]：
+     * AIOParam → AIOSession → AIOContact。
+     */
+    fun contactFromCurrentAioParam(): ContactDescriptor? {
+        val aioParam = currentAioParam?.get() ?: return null
+        return aioParamToContact(aioParam)
+    }
+
+    fun aioParamToContact(aioParam: Any): ContactDescriptor? {
+        val sessionType = runCatching { loadClass(AIO_SESSION_CLASS) }.getOrNull() ?: return null
+        val contactType = runCatching { loadClass(AIO_CONTACT_CLASS) }.getOrNull() ?: return null
+        val session = readFieldByType(aioParam, sessionType) ?: return null
+        val contact = readFieldByType(session, contactType) ?: return null
+        return describeContact(contact)
+    }
+
     /** 发送本地文件。默认按普通图片，type 可选表情。 */
     fun sendImage(file: File, type: SendType = SendType.IMAGE): Result<Unit> = runCatching {
         check(file.isFile && file.canRead()) { "图片文件不可用" }

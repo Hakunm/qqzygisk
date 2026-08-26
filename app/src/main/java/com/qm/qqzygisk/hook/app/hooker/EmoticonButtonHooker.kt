@@ -214,7 +214,10 @@ object EmoticonButtonHooker : BaseHooker() {
             ?: return
         runCatching {
             type.resolve().constructor { }.hookAll {
-                after(onCreated)
+                after {
+                    onCreated()
+                    RepeaterHooker.retry()
+                }
             }
         }.onSuccess {
             Log.info("已挂钩 $className，会话图片发送已就绪")

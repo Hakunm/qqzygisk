@@ -1,3 +1,8 @@
+# 2.0.2
+
+- 消息+1 按 QAuxiliary RepeaterPlus 对齐：挂钩 `(int, *, List)`，从 `kotlin.Lazy` 取出 QQ 自己的 follow 按钮
+- 不再要求第二参必须是 AIOMsgItem，避免新版 QQ 对不上方法、消息旁没有 +1
+
 # 2.0.1
 
 - 修复 2.0.0 一点开 QQ 就闪退：+1 和选表情包导入不再在 ClassLoader 初始化时挂钩/扫盘
