@@ -29,6 +29,7 @@ import java.lang.reflect.Method
 import java.lang.reflect.Modifier
 import java.util.Collections
 import java.util.WeakHashMap
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * QAuxiliary 的消息 +1。挂钩 NT 的 AIOMsgFollowComponent 旁路按钮，
@@ -43,33 +44,44 @@ object RepeaterHooker : BaseHooker() {
     private const val FOLLOW_COMPONENT =
         "com.tencent.mobileqq.aio.msglist.holder.component.msgfollow.AIOMsgFollowComponent"
 
-    private val mainHandler = Handler(Looper.getMainLooper())
     private val hookedMethods = Collections.synchronizedSet(mutableSetOf<String>())
     private val imageViews = Collections.synchronizedMap(WeakHashMap<Any, ImageView>())
+    private val menuInstalled = AtomicBoolean(false)
 
     @Volatile
     private var plusOneIcon: Drawable? = null
 
     private val enabled get() = HookSettings.isEnabled(key, defaultEnabled)
+    private val mainHandler by lazy { Handler(Looper.getMainLooper()) }
 
     override fun initOnce() {
+        ensureMenuItem()
         retry()
-        ChatMenu.addMenuItem(
-            title = "+1",
-            type = ChatMenuType.Any,
-            icon = R.drawable.ic_repeat_plus,
-            visible = { enabled },
-            position = ChatMenuPosition.Front,
-        ) { context, msg ->
-            if (isMultiForward(context)) return@addMenuItem
-            ChatImageSender.captureFromContext(context)
-            repeatMessage(msg, context)
-        }
     }
 
     fun retry() {
         runCatching { hookFollowComponent() }
             .onFailure { Log.warn("repeat-plus follow hook failed", it) }
+    }
+
+    private fun ensureMenuItem() {
+        if (!menuInstalled.compareAndSet(false, true)) return
+        runCatching {
+            ChatMenu.addMenuItem(
+                title = "+1",
+                type = ChatMenuType.Any,
+                icon = R.drawable.ic_repeat_plus,
+                visible = { enabled },
+                position = ChatMenuPosition.Front,
+            ) { context, msg ->
+                if (isMultiForward(context)) return@addMenuItem
+                ChatImageSender.captureFromContext(context)
+                repeatMessage(msg, context)
+            }
+        }.onFailure {
+            menuInstalled.set(false)
+            Log.warn("repeat-plus menu failed", it)
+        }
     }
 
     private fun hookFollowComponent() {
@@ -78,23 +90,36 @@ object RepeaterHooker : BaseHooker() {
             Log.warn("repeat-plus missing $FOLLOW_COMPONENT")
             return
         }
+        val aioMsg = NtMsgAccess.loadClass("com.tencent.mobileqq.aio.msg.AIOMsgItem")
         type.declaredMethods.forEach { method ->
-            if (!shouldHook(method)) return@forEach
+            if (!shouldHook(method, aioMsg)) return@forEach
             hookOnce(method) {
-                after { bindFollowButton(method, this.instance, this.args, this.result) }
+                after {
+                    runCatching {
+                        bindFollowButton(method, instance, args, result)
+                    }.onFailure { Log.warn("repeat-plus bind failed", it) }
+                }
             }
         }
         Log.info("repeat-plus hooked ${type.simpleName}")
     }
 
-    private fun shouldHook(method: Method): Boolean {
-        if (Modifier.isAbstract(method.modifiers) || Modifier.isStatic(method.modifiers) || method.isSynthetic) {
+    private fun shouldHook(method: Method, aioMsg: Class<*>?): Boolean {
+        val modifiers = method.modifiers
+        if (
+            Modifier.isAbstract(modifiers) ||
+            Modifier.isStatic(modifiers) ||
+            Modifier.isNative(modifiers) ||
+            method.isSynthetic ||
+            method.isBridge
+        ) {
             return false
         }
         val types = method.parameterTypes
         val zeroArgImage = types.isEmpty() && ImageView::class.java.isAssignableFrom(method.returnType)
         val bindArgs = types.size == 3 &&
             (types[0] == Int::class.javaPrimitiveType || types[0] == java.lang.Integer::class.java) &&
+            (aioMsg == null || aioMsg.isAssignableFrom(types[1])) &&
             List::class.java.isAssignableFrom(types[2])
         return zeroArgImage || bindArgs
     }
@@ -134,7 +159,7 @@ object RepeaterHooker : BaseHooker() {
                 val value = runCatching { field.get(instance) }.getOrNull() ?: continue
                 if (value is ImageView) return value
                 val typeName = field.type.name
-                if (typeName == "kotlin.Lazy" || typeName.contains("Lazy")) {
+                if (typeName == "kotlin.Lazy") {
                     val lazyValue = NtMsgAccess.invokeNoArg(value, "getValue")
                     if (lazyValue is ImageView) return lazyValue
                 }
@@ -183,7 +208,12 @@ object RepeaterHooker : BaseHooker() {
     private fun hookOnce(method: Method, action: MemberHookCreator.() -> Unit) {
         val id = method.toGenericString()
         if (!hookedMethods.add(id)) return
-        method.isAccessible = true
-        method.hook(action)
+        runCatching {
+            method.isAccessible = true
+            method.hook(action)
+        }.onFailure {
+            hookedMethods.remove(id)
+            Log.warn("repeat-plus hook ${method.name} failed", it)
+        }
     }
 }

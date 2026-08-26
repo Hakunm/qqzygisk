@@ -64,6 +64,7 @@ object QQEntry {
                 runCatching { ModuleUtils.ensureModuleApkPath() }
                 registerModuleAppActivities(proxy = generalSettingActivityClass)
                 ChatMenuHooker.load()
+                RepeaterHooker.load()
                 AntiRevokeHooker.retry()
                 RepeaterHooker.retry()
                 ImageFolderStore.scheduleImport()
@@ -84,7 +85,7 @@ object QQEntry {
             )
         hooks.forEach { hooker ->
             if (hooker.isShow) settings.add(hooker.toSettingData())
-            if (hooker !== ChatMenuHooker) hooker.load()
+            if (hooker !== ChatMenuHooker && hooker !== RepeaterHooker) hooker.load()
         }
         StartActivityHooker.decorators.forEach { hooker ->
             if (hooker.isShow) settings.add(hooker.toSettingData())

@@ -82,7 +82,9 @@ object ImageFolderStore {
         listeners.forEach { it() }
     }
 
-    fun root(): File = File(ROOT_PATH).apply { mkdirs() }
+    fun root(): File = File(ROOT_PATH).apply {
+        runCatching { if (!isDirectory) mkdirs() }
+    }
 
     fun isOwned(folder: File): Boolean =
         folder.absolutePath.startsWith(root().absolutePath + "/")
@@ -100,6 +102,7 @@ object ImageFolderStore {
         if (!importRunning.compareAndSet(false, true)) return
         importExecutor.execute {
             try {
+                Thread.sleep(2_500)
                 val copied = importExternalIfNeeded(force = false)
                 if (copied > 0) {
                     Log.info("background imported $copied stickers")

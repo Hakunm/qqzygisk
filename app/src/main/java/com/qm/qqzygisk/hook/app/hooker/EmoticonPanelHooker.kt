@@ -189,7 +189,6 @@ object EmoticonPanelHooker : BaseHooker() {
             provider.invalidateCache()
             lastPanelDataSize = -1
         }
-        ImageFolderStore.scheduleImport()
 
         EmoticonPanelController
             .resolve()
