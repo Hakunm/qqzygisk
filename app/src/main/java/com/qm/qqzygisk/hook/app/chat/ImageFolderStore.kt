@@ -204,6 +204,7 @@ object ImageFolderStore {
             }
             saveUsageLocked(store)
         }
+        notifyChanged()
     }
 
     fun folderUsage(folder: File): Int {
@@ -411,8 +412,8 @@ object ImageFolderStore {
         val entries = synchronized(usageLock) { loadUsageLocked().files.entries.toList() }
         return entries
             .sortedWith(
-                compareByDescending<Map.Entry<String, UsageEntry>> { it.value.count }
-                    .thenByDescending { it.value.lastUsed },
+                compareByDescending<Map.Entry<String, UsageEntry>> { it.value.lastUsed }
+                    .thenByDescending { it.value.count },
             )
             .mapNotNull { resolveUsageFile(it.key) }
             .distinctBy { it.absolutePath }

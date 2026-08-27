@@ -260,16 +260,17 @@ object EmoticonPanelHooker : BaseHooker() {
                     ChatImageSender.captureFrom(instance)
                     val sent = ChatImageSender.sendImage(file, ChatImageSender.SendType.EMOTICON)
                     if (sent.isSuccess) {
-                        ImageFolderStore.recordUsage(file)
                         result = null
                     } else {
                         Log.warn("内置表情改走本地发送失败，回退 QQ 原发送", sent.exceptionOrNull())
                     }
                 }
                 after {
-                    if (!enabled) return@after
                     val path = instance.get<String>("path") ?: return@after
-                    ImageFolderStore.recordUsage(File(path))
+                    val file = File(path)
+                    if (ImageFolderStore.isLocalEmoticon(file)) {
+                        ImageFolderStore.recordUsage(file)
+                    }
                 }
             }
     }
