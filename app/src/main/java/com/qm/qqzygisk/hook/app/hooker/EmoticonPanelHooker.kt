@@ -143,24 +143,13 @@ object EmoticonPanelHooker : BaseHooker() {
 
     private fun getEmotionPanelData(method: MethodCall) {
         val emotionPanelInfo = method.args[2]!!
-        @Suppress("UNCHECKED_CAST")
-        val list = method.result as MutableList<Any>
         val pkg = emotionPanelInfo.get<Any>("emotionPkg") ?: return
         val epId = pkg.get<String>("epId") ?: return
-        val id = parseQZEpId(epId)
-        if(id != null) {
-            val provider = providers.find { it.uniqueId() == id.providerId }
-            if(provider != null) {
-                val panel = provider.extraEmoticonList().find { it.uniqueId() == id.panelId }
-                if(panel != null) {
-                    val emoticons = panel.emoticons()
-                    for(emoticon in emoticons) {
-                        list.add(emoticon.QQEmoticonObject())
-                    }
-                }
-            }
-            method.result = list
-        }
+        val id = parseQZEpId(epId) ?: return
+        val provider = providers.find { it.uniqueId() == id.providerId } ?: return
+        val panel = provider.extraEmoticonList().find { it.uniqueId() == id.panelId } ?: return
+        val list = ArrayList<Any>(panel.emoticons().map { it.QQEmoticonObject() })
+        method.result = list
     }
 
     private fun handleIPSite(method: MethodCall) {

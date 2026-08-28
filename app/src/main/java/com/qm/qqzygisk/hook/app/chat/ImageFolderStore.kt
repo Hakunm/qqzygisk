@@ -198,6 +198,7 @@ object ImageFolderStore {
         synchronized(usageLock) {
             val store = loadUsageLocked()
             bump(store.files, file.absolutePath, now)
+            mergeDuplicateUsage(store, file)
             val parent = file.parentFile
             if (parent != null && !isHistoryFolder(parent)) {
                 bump(store.folders, parent.absolutePath, now)
@@ -416,7 +417,7 @@ object ImageFolderStore {
                     .thenByDescending { it.value.count },
             )
             .mapNotNull { resolveUsageFile(it.key) }
-            .distinctBy { it.absolutePath }
+            .distinctBy(::imageIdentity)
             .take(HISTORY_LIMIT)
     }
 
@@ -429,6 +430,27 @@ object ImageFolderStore {
         }
         return null
     }
+
+    private fun mergeDuplicateUsage(store: UsageStore, file: File) {
+        val identity = imageIdentity(file)
+        val current = store.files[file.absolutePath] ?: return
+        store.files.keys.filter { path ->
+            path != file.absolutePath && imageIdentity(File(path)) == identity
+        }.forEach { path ->
+            val other = store.files.remove(path) ?: return@forEach
+            current.count = maxOf(current.count, other.count)
+            current.lastUsed = maxOf(current.lastUsed, other.lastUsed)
+        }
+    }
+
+    private fun imageIdentity(file: File): String {
+        val name = normalizeImageName(file.name)
+        val length = file.takeIf { it.isFile }?.length() ?: -1L
+        return if (length > 0L) "$length:$name" else name
+    }
+
+    private fun normalizeImageName(name: String): String =
+        name.lowercase().replace(Regex("^\\d+_"), "")
 
     private fun bump(map: MutableMap<String, UsageEntry>, key: String, now: Long) {
         val current = map[key]

@@ -540,6 +540,7 @@ class SaveImagePanel private constructor(
         generation: Int,
     ) {
         val key = thumbnailKey(file, size)
+        if (image.tag == key && image.drawable != null) return
         image.tag = key
         synchronized(thumbnailCache) { thumbnailCache.get(key) }?.let {
             AnimatedImageLoader.clear(image)
@@ -555,7 +556,7 @@ class SaveImagePanel private constructor(
                     if (closed || generation != imageGeneration) return@execute
                     val drawable = AnimatedImageLoader.decode(file, size) ?: return@execute
                     if (closed || generation != imageGeneration) return@execute
-                    val bitmap = (drawable as? BitmapDrawable)?.bitmap
+                    val bitmap = AnimatedImageLoader.stillBitmap(drawable)
                     if (bitmap != null) {
                         synchronized(thumbnailCache) { thumbnailCache.put(key, bitmap) }
                     }
@@ -622,7 +623,7 @@ class SaveImagePanel private constructor(
                 } else {
                     null
                 }
-                val bitmap = cachedBitmap ?: (drawable as? BitmapDrawable)?.bitmap?.also {
+                val bitmap = cachedBitmap ?: drawable?.let(AnimatedImageLoader::stillBitmap)?.also {
                     synchronized(thumbnailCache) { thumbnailCache.put(coverKey, it) }
                 }
                 if (bitmap == null && drawable == null) return@execute

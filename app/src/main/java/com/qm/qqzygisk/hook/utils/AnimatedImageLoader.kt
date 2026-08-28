@@ -1,7 +1,10 @@
 package com.qm.qqzygisk.hook.utils
 
+import android.graphics.Bitmap
+import android.graphics.Canvas
 import android.graphics.ImageDecoder
 import android.graphics.drawable.Animatable
+import android.graphics.drawable.BitmapDrawable
 import android.graphics.drawable.Drawable
 import android.view.View
 import android.widget.ImageView
@@ -19,6 +22,20 @@ object AnimatedImageLoader {
 
     fun decode(bytes: ByteArray, maxSize: Int): Drawable? =
         decode(ImageDecoder.createSource(ByteBuffer.wrap(bytes)), maxSize)
+
+    /** Grid thumbs use a still frame so GIFs do not restart on every bind. */
+    fun stillBitmap(drawable: Drawable): Bitmap? {
+        (drawable as? BitmapDrawable)?.bitmap?.let { return it }
+        val width = drawable.intrinsicWidth.coerceAtLeast(1)
+        val height = drawable.intrinsicHeight.coerceAtLeast(1)
+        return runCatching {
+            val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+            val canvas = Canvas(bitmap)
+            drawable.setBounds(0, 0, width, height)
+            drawable.draw(canvas)
+            bitmap
+        }.getOrNull()
+    }
 
     fun bind(view: ImageView, drawable: Drawable) {
         clear(view)
