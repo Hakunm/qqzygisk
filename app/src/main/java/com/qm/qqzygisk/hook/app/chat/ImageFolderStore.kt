@@ -276,6 +276,22 @@ object ImageFolderStore {
         notifyChanged()
     }
 
+    /** 只把这张表情从「历史」里去掉，不动原文件。 */
+    fun removeFromHistory(file: File) {
+        val identity = imageIdentity(file)
+        synchronized(usageLock) {
+            val store = loadUsageLocked()
+            val keys = store.files.keys.filter { imageIdentity(File(it)) == identity }
+            if (keys.isEmpty()) {
+                store.files.remove(file.absolutePath)
+            } else {
+                keys.forEach { store.files.remove(it) }
+            }
+            saveUsageLocked(store)
+        }
+        notifyChanged()
+    }
+
     private fun cachedOwnedFolders(): List<File> {
         val roots = SCAN_ROOTS
         val stamp = roots.joinToString("|") { path ->
@@ -449,8 +465,11 @@ object ImageFolderStore {
         return if (length > 0L) "$length:$name" else name
     }
 
+    /** 去掉导入时加的 `<长度>_` 前缀和扩展名，让原文件和导入副本能对上。 */
     private fun normalizeImageName(name: String): String =
-        name.lowercase().replace(Regex("^\\d+_"), "")
+        name.lowercase()
+            .replace(Regex("^\\d+_"), "")
+            .substringBeforeLast('.')
 
     private fun bump(map: MutableMap<String, UsageEntry>, key: String, now: Long) {
         val current = map[key]

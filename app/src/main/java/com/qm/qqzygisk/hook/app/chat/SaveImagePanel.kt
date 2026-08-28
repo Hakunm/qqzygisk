@@ -6,7 +6,7 @@ import android.content.DialogInterface
 import android.graphics.Bitmap
 import android.graphics.Color
 import android.graphics.Typeface
-import android.graphics.drawable.BitmapDrawable
+import android.graphics.drawable.Animatable
 import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
 import android.text.InputType
@@ -246,7 +246,8 @@ class SaveImagePanel private constructor(
                 onItemLongClickListener = AdapterView.OnItemLongClickListener { parent, _, position, _ ->
                     val file = parent.adapter.getItem(position) as? File
                         ?: return@OnItemLongClickListener false
-                    showEmoticonPreview(file)
+                    val inHistory = selected[0]?.let(ImageFolderStore::isHistoryFolder) == true
+                    showEmoticonPreview(file, inHistory)
                     true
                 }
             }
@@ -556,9 +557,13 @@ class SaveImagePanel private constructor(
                     if (closed || generation != imageGeneration) return@execute
                     val drawable = AnimatedImageLoader.decode(file, size) ?: return@execute
                     if (closed || generation != imageGeneration) return@execute
-                    val bitmap = AnimatedImageLoader.stillBitmap(drawable)
-                    if (bitmap != null) {
-                        synchronized(thumbnailCache) { thumbnailCache.put(key, bitmap) }
+                    // 动图保留动画，只有静图缓存成 bitmap。
+                    val bitmap = if (drawable is Animatable) {
+                        null
+                    } else {
+                        AnimatedImageLoader.stillBitmap(drawable)?.also {
+                            synchronized(thumbnailCache) { thumbnailCache.put(key, it) }
+                        }
                     }
                     publishThumbnail(key, drawable, bitmap, generation)
                 } finally {
@@ -664,7 +669,7 @@ class SaveImagePanel private constructor(
             }
     }
 
-    private fun showEmoticonPreview(file: File) {
+    private fun showEmoticonPreview(file: File, inHistory: Boolean = false) {
         val preview = ImageView(context).apply {
             scaleType = ImageView.ScaleType.FIT_CENTER
             adjustViewBounds = true
@@ -692,10 +697,12 @@ class SaveImagePanel private constructor(
             )
             addView(
                 filledButton(
-                    "删除",
+                    if (inHistory) "从历史移除" else "删除",
                     ContextCompat.getColor(context, R.color.qqz_error),
                     ContextCompat.getColor(context, R.color.qqz_on_error),
-                ) { confirmDeleteEmoticon(file) },
+                ) {
+                    if (inHistory) removeFromHistory(file) else confirmDeleteEmoticon(file)
+                },
                 LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT,
                     context.dp(48),
@@ -713,6 +720,19 @@ class SaveImagePanel private constructor(
                     if (previewDialog === dialog) previewDialog = null
                 }
                 dialog.show()
+            }
+    }
+
+    private fun removeFromHistory(file: File) {
+        runCatching { ImageFolderStore.removeFromHistory(file) }
+            .onSuccess {
+                previewDialog?.dismiss()
+                bindFolders()
+                Toast.makeText(context, "已从历史移除", Toast.LENGTH_SHORT).show()
+            }
+            .onFailure {
+                Log.error("从历史移除失败: ${file.absolutePath}", it)
+                Toast.makeText(context, "移除失败", Toast.LENGTH_SHORT).show()
             }
     }
 
