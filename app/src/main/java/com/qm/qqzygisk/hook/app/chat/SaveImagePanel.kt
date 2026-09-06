@@ -1,6 +1,8 @@
 package com.qm.qqzygisk.hook.app.chat
 
 import android.app.Dialog
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import android.content.DialogInterface
 import android.graphics.Bitmap
@@ -42,6 +44,7 @@ import com.qm.qqzygisk.R
 import com.qm.qqzygisk.hook.utils.AnimatedImageLoader
 import com.qm.qqzygisk.hook.utils.ImageDownloader
 import com.qm.qqzygisk.hook.utils.Log
+import com.qm.qqzygisk.hook.utils.ModuleLog
 import com.qm.qqzygisk.hook.utils.injectModuleAppResources
 import java.io.File
 import java.lang.ref.WeakReference
@@ -75,6 +78,9 @@ class SaveImagePanel private constructor(
     private var emptyHint: TextView? = null
     private var previewView: ImageView? = null
     private var previewProgress: ProgressBar? = null
+    private var statusView: TextView? = null
+    private var statusBox: View? = null
+    private var copyLogButton: TextView? = null
     private var panelDialog: Dialog? = null
     private var previewDialog: Dialog? = null
     private var performingAction = false
@@ -216,7 +222,47 @@ class SaveImagePanel private constructor(
                 LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT,
                     context.dp(200),
-                ).apply { bottomMargin = context.dp(20) },
+                ).apply { bottomMargin = context.dp(12) },
+            )
+            val status = TextView(context).apply {
+                setTextIsSelectable(true)
+                typeface = Typeface.MONOSPACE
+                setTextColor(colors.muted)
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
+            }
+            statusView = status
+            val box = ScrollView(context).apply {
+                isVerticalScrollBarEnabled = true
+                visibility = View.GONE
+                addView(
+                    status,
+                    ViewGroup.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT,
+                    ),
+                )
+            }
+            statusBox = box
+            root.addView(
+                box,
+                LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    context.dp(140),
+                ).apply { bottomMargin = context.dp(8) },
+            )
+            val copy = filledButton("复制日志", colors.secondary, colors.onSecondary) {
+                val text = statusView?.text?.toString().orEmpty()
+                val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                clipboard.setPrimaryClip(ClipData.newPlainText("qhook-log", text))
+                Toast.makeText(context, "日志已复制", Toast.LENGTH_SHORT).show()
+            }.apply { visibility = View.GONE }
+            copyLogButton = copy
+            root.addView(
+                copy,
+                LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    context.dp(40),
+                ).apply { bottomMargin = context.dp(12) },
             )
         }
 
@@ -825,6 +871,7 @@ class SaveImagePanel private constructor(
             progress.visibility = View.GONE
             return
         }
+        showPreviewStatus(null)
         Thread({
             val result = runCatching { ImageDownloader.fetch(imageUrls) }
             preview.post {
@@ -834,14 +881,35 @@ class SaveImagePanel private constructor(
                 if (drawable != null) {
                     pending[0] = downloaded
                     AnimatedImageLoader.bind(preview, drawable)
+                    showPreviewStatus(null)
                 } else {
                     preview.setImageResource(android.R.drawable.ic_menu_report_image)
-                }
-                result.exceptionOrNull()?.let {
-                    Log.error("加载聊天图片预览失败（${imageUrls.size} 个候选地址）", it)
+                    val error = result.exceptionOrNull()
+                    error?.let {
+                        Log.error("加载聊天图片预览失败（${imageUrls.size} 个候选地址）", it)
+                    }
+                    showPreviewStatus(
+                        buildString {
+                            appendLine("取不到图片，已尝试 ${imageUrls.size} 个来源。")
+                            error?.message?.let { appendLine(it) }
+                            appendLine()
+                            appendLine("日志文件：")
+                            appendLine(ModuleLog.locationHint())
+                            appendLine("也可在 QQ设置 → QHook → 模块日志 查看。")
+                            appendLine()
+                            append(ModuleLog.readTail(60).ifBlank { "还没有写入日志文件" })
+                        },
+                    )
                 }
             }
         }, "QHook-ImagePreview").start()
+    }
+
+    private fun showPreviewStatus(text: String?) {
+        val visible = !text.isNullOrBlank()
+        statusView?.text = text.orEmpty()
+        statusBox?.visibility = if (visible) View.VISIBLE else View.GONE
+        copyLogButton?.visibility = if (visible) View.VISIBLE else View.GONE
     }
 
     private fun showCreateFolder() {

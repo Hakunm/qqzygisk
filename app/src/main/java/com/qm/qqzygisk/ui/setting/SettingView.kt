@@ -1,7 +1,12 @@
 package com.qm.qqzygisk.ui.setting
 
 import androidx.activity.compose.BackHandler
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
+import android.widget.Toast
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
@@ -10,7 +15,9 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
@@ -35,10 +42,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import com.qm.qqzygisk.hook.app.QQEntry.settings
 import com.qm.qqzygisk.hook.app.chat.ImageFolderStore
 import com.qm.qqzygisk.hook.utils.HookSettings
+import com.qm.qqzygisk.hook.utils.ModuleLog
 import com.qm.qqzygisk.ui.component.setting.SettingSwitch
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -46,8 +55,8 @@ import com.qm.qqzygisk.ui.component.setting.SettingSwitch
 fun SettingView() {
     val context = LocalContext.current
     remember(context) { HookSettings.initialize(context) }
-    var showPathSettings by rememberSaveable { mutableStateOf(false) }
-    BackHandler(enabled = showPathSettings) { showPathSettings = false }
+    var page by rememberSaveable { mutableStateOf("main") }
+    BackHandler(enabled = page != "main") { page = "main" }
 
     Scaffold(
         topBar = {
@@ -57,11 +66,17 @@ fun SettingView() {
                     titleContentColor = MaterialTheme.colorScheme.primary,
                 ),
                 title = {
-                    Text(if (showPathSettings) "表情目录" else "设置")
+                    Text(
+                        when (page) {
+                            "path" -> "表情目录"
+                            "log" -> "模块日志"
+                            else -> "设置"
+                        },
+                    )
                 },
                 navigationIcon = {
-                    if (showPathSettings) {
-                        IconButton(onClick = { showPathSettings = false }) {
+                    if (page != "main") {
+                        IconButton(onClick = { page = "main" }) {
                             Icon(
                                 imageVector = Icons.AutoMirrored.Outlined.ArrowBack,
                                 contentDescription = "返回",
@@ -72,18 +87,23 @@ fun SettingView() {
             )
         }
     ) { innerPadding ->
-        if (showPathSettings) {
-            PathSettingsPage(
+        when (page) {
+            "path" -> PathSettingsPage(
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(innerPadding),
             )
-        } else {
-            MainSettings(
+            "log" -> LogSettingsPage(
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(innerPadding),
-                onOpenPathSettings = { showPathSettings = true },
+            )
+            else -> MainSettings(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(innerPadding),
+                onOpenPathSettings = { page = "path" },
+                onOpenLogSettings = { page = "log" },
             )
         }
     }
@@ -93,6 +113,7 @@ fun SettingView() {
 private fun MainSettings(
     modifier: Modifier = Modifier,
     onOpenPathSettings: () -> Unit,
+    onOpenLogSettings: () -> Unit,
 ) {
     Column(
         modifier = modifier
@@ -132,6 +153,31 @@ private fun MainSettings(
                 )
                 Text(
                     text = "FunBox / TG 导入到本地可写收藏夹",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Icon(
+                imageVector = Icons.AutoMirrored.Outlined.KeyboardArrowRight,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable(onClick = onOpenLogSettings)
+                .padding(vertical = 16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "模块日志",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+                Text(
+                    text = "长按保存失败时看这里，不用再翻 logcat",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -266,4 +312,79 @@ private fun ColumnScope.PathSettings() {
         )
     }
     Spacer(modifier = Modifier.height(24.dp))
+}
+
+@Composable
+private fun LogSettingsPage(modifier: Modifier = Modifier) {
+    val context = LocalContext.current
+    var logText by remember { mutableStateOf(ModuleLog.readTail()) }
+    var hint by remember { mutableStateOf("") }
+
+    fun refresh() {
+        logText = ModuleLog.readTail()
+        hint = ""
+    }
+
+    Column(
+        modifier = modifier
+            .fillMaxSize()
+            .padding(horizontal = 16.dp),
+    ) {
+        Spacer(modifier = Modifier.height(16.dp))
+        Text(
+            text = "长按保存图片时会写入这些文件，手机文件管理也能打开：",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        Text(
+            text = ModuleLog.locationHint(),
+            style = MaterialTheme.typography.bodySmall,
+            fontFamily = FontFamily.Monospace,
+            color = MaterialTheme.colorScheme.onSurface,
+        )
+        Spacer(modifier = Modifier.height(12.dp))
+        Row {
+            Button(onClick = { refresh() }) { Text("刷新") }
+            Spacer(modifier = Modifier.width(8.dp))
+            Button(
+                onClick = {
+                    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                    clipboard.setPrimaryClip(ClipData.newPlainText("qhook-log", logText))
+                    hint = "已复制"
+                    Toast.makeText(context, "日志已复制", Toast.LENGTH_SHORT).show()
+                },
+            ) { Text("复制") }
+            Spacer(modifier = Modifier.width(8.dp))
+            Button(
+                onClick = {
+                    ModuleLog.clear()
+                    refresh()
+                    hint = "已清空"
+                },
+            ) { Text("清空") }
+        }
+        if (hint.isNotEmpty()) {
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = hint,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Spacer(modifier = Modifier.height(12.dp))
+        SelectionContainer(
+            modifier = Modifier
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .horizontalScroll(rememberScrollState()),
+        ) {
+            Text(
+                text = logText.ifBlank { "还没有日志。打开聊天长按保存一次图片后再回来刷新。" },
+                style = MaterialTheme.typography.bodySmall,
+                fontFamily = FontFamily.Monospace,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+        }
+    }
 }

@@ -98,4 +98,76 @@ class NtPicResolverTest {
         )
         assertEquals(listOf("https://gchat.qpic.cn/gchatpic_new/0/0-0-DEADBEEF/0"), sources)
     }
+
+    @Test
+    fun extraLocalsComeFirst() {
+        val sources = NtPicResolver.expand(
+            originUrl = "/download?appid=1407&fileid=xyz",
+            sourcePath = null,
+            thumbPaths = emptyList(),
+            md5 = null,
+            emojiWebUrl = null,
+            snapshot = null,
+            fileExists = { it == "/cache/from-kernel.webp" },
+            extraLocals = listOf("/cache/from-kernel.webp"),
+        )
+        assertEquals("/cache/from-kernel.webp", sources.first())
+    }
+
+    @Test
+    fun fileUuidBecomesNtDownload() {
+        val snapshot = RkeySnapshot(
+            byType = mapOf(NtImageRkey.TYPE_PRIVATE to "&rkey=priv"),
+            expiresAtMillis = Long.MAX_VALUE,
+        )
+        val sources = NtPicResolver.expand(
+            originUrl = null,
+            sourcePath = null,
+            thumbPaths = emptyList(),
+            md5 = null,
+            emojiWebUrl = null,
+            snapshot = snapshot,
+            fileUuid = "FILEID123",
+        )
+        assertTrue(
+            sources.any {
+                it.startsWith("https://multimedia.nt.qq.com.cn/download?appid=1406&fileid=FILEID123") &&
+                    it.contains("rkey=priv")
+            },
+        )
+        assertTrue(sources.any { it.contains("spec=0") })
+    }
+
+    @Test
+    fun schemeLessNtHostIsNormalized() {
+        val sources = NtPicResolver.normalizeRemote(
+            "multimedia.nt.qq.com.cn/download?appid=1406&fileid=abc",
+        )
+        assertEquals(
+            listOf("https://multimedia.nt.qq.com.cn/download?appid=1406&fileid=abc"),
+            sources,
+        )
+    }
+
+    @Test
+    fun specVariantsAddOriginalSize() {
+        assertEquals(
+            listOf(
+                "https://multimedia.nt.qq.com.cn/download?appid=1406&fileid=abc",
+                "https://multimedia.nt.qq.com.cn/download?appid=1406&fileid=abc&spec=0",
+            ),
+            NtPicResolver.specVariants("https://multimedia.nt.qq.com.cn/download?appid=1406&fileid=abc"),
+        )
+        assertEquals(
+            listOf("https://multimedia.nt.qq.com.cn/download?appid=1406&fileid=abc&spec=0"),
+            NtPicResolver.specVariants("https://multimedia.nt.qq.com.cn/download?appid=1406&fileid=abc&spec=0"),
+        )
+    }
+
+    @Test
+    fun extraBytesYieldDownloadAndRkey() {
+        val packed = "xx/download?appid=1407&fileid=ZZZ rkey=TOKEN99".toByteArray()
+        assertTrue(NtPicResolver.extractUrls(packed).any { it.startsWith("/download?appid=1407") })
+        assertEquals(listOf("rkey=TOKEN99"), NtPicResolver.extractRkeys(packed))
+    }
 }

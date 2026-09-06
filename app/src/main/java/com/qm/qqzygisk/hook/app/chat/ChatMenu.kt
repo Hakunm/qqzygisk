@@ -11,9 +11,11 @@ import com.qm.qqzygisk.hook.utils.injectModuleAppResources
 import java.lang.reflect.Field
 import java.lang.reflect.Method
 import java.lang.reflect.Modifier
+import java.lang.ref.WeakReference
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 
 /**
  * 长按菜单匹配的消息内容类型。QQ 类名在这里解析，调用方只写枚举。
@@ -44,6 +46,9 @@ object ChatMenu {
     private val elementsMethods = ConcurrentHashMap<Class<*>, Method>()
     private val elementGetterMethods = ConcurrentHashMap<ElementGetterKey, Method>()
     private val typeClasses = ConcurrentHashMap<ChatMenuType, Class<*>>()
+    private val lastMenuRef = AtomicReference<WeakReference<View>?>(null)
+
+    val lastMenuLayout: View? get() = lastMenuRef.get()?.get()
 
     private data class MenuEntry(
         val title: String,
@@ -131,6 +136,7 @@ object ChatMenu {
             messageMethods[baseClass] = this
         }
         val message = messageMethod.invoke(template) ?: return
+        lastMenuRef.set(WeakReference(layout))
         val methods = baseClass.declaredMethods.filter {
             it.parameterCount == 0 && !Modifier.isStatic(it.modifiers) && !Modifier.isFinal(it.modifiers)
         }
