@@ -44,6 +44,7 @@ object ChatMenuHooker : BaseHooker() {
         context: Context,
         picElement: Any,
     ) {
+        val sources = linkedSetOf<String>()
         runCatching {
             Log.info("保存图片 PicElement ${NtPicResolver.describe(picElement)}")
             val snapshot = NtImageRkeyProvider.snapshot()
@@ -51,22 +52,21 @@ object ChatMenuHooker : BaseHooker() {
                 "rkey ready=${snapshot != null} types=${snapshot?.byType?.keys} " +
                     "expires=${snapshot?.expiresAtMillis}",
             )
-            val sources = runCatching { NtPicResolver.resolve(picElement) }
-                .onFailure { Log.error("解析 PicElement 失败", it) }
-                .getOrDefault(emptyList())
-                .toMutableList()
-            ChatPicOnScreen.capture(context, picElement)?.let { path ->
-                if (path !in sources) sources.add(path)
-            }
-            if (sources.isEmpty()) {
-                Log.warn("PicElement 没有可用的本地路径或图片地址")
-            } else {
-                Log.info(
-                    "图片候选 ${sources.size} 个: " +
-                        sources.joinToString(" | ") { it.take(180) },
-                )
-            }
-            SaveImagePanel.show(context, sources)
+            sources.addAll(NtPicResolver.resolve(picElement))
+        }.onFailure { Log.error("解析 PicElement 失败", it) }
+        runCatching {
+            ChatPicOnScreen.capture(context, picElement)?.let(sources::add)
+        }.onFailure { Log.warn("截取聊天界面图片失败", it) }
+        if (sources.isEmpty()) {
+            Log.warn("PicElement 没有可用的本地路径或图片地址")
+        } else {
+            Log.info(
+                "图片候选 ${sources.size} 个: " +
+                    sources.joinToString(" | ") { it.take(180) },
+            )
+        }
+        runCatching {
+            SaveImagePanel.show(context, sources.toList(), forceSave = true)
         }.onFailure {
             Log.error("打开图片面板失败", it)
             Toast.makeText(context, "无法打开图片面板", Toast.LENGTH_SHORT).show()

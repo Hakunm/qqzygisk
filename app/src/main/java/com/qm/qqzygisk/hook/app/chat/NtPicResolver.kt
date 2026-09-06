@@ -86,13 +86,17 @@ internal object NtPicResolver {
         remotes.forEach(sources::add)
         emojiWebUrl?.takeIf { it.startsWith("http://") || it.startsWith("https://") }
             ?.let(sources::add)
-        if (sources.isEmpty()) {
+        val hasLocal = sources.any { looksLikeLocalFile(it) }
+        if (!hasLocal) {
             md5?.takeIf { it.isNotBlank() }?.let {
                 sources += "$GCHAT_HOST/gchatpic_new/0/0-0-${it.uppercase()}/0"
             }
         }
         return sources.toList()
     }
+
+    private fun looksLikeLocalFile(path: String): Boolean =
+        !path.startsWith("http://") && !path.startsWith("https://")
 
     fun looksLikeLocalPath(path: String): Boolean {
         if (path.startsWith("file:")) return true

@@ -68,6 +68,7 @@ class SaveImagePanel private constructor(
     private val actions: List<ImagePanelAction>,
     initialActionId: String?,
     private val onActionSelected: ((String) -> Unit)?,
+    private val forceSave: Boolean,
 ) {
     private val colors = PanelColors.from(context)
     private val pending = arrayOfNulls<ImageDownloader.DownloadedImage>(1)
@@ -103,7 +104,7 @@ class SaveImagePanel private constructor(
     private var imageGeneration = 0
     @Volatile
     private var closed = false
-    private val browseOnly get() = imageUrls.isEmpty()
+    private val browseOnly get() = imageUrls.isEmpty() && !forceSave
     private val storeListener: () -> Unit = {
         panelDialog?.window?.decorView?.post {
             if (!closed) bindFolders()
@@ -869,6 +870,15 @@ class SaveImagePanel private constructor(
         val progress = previewProgress ?: return
         if (imageUrls.isEmpty()) {
             progress.visibility = View.GONE
+            showPreviewStatus(
+                buildString {
+                    appendLine("取不到图片。")
+                    appendLine("日志文件：")
+                    appendLine(ModuleLog.locationHint())
+                    appendLine()
+                    append(ModuleLog.readTail(60).ifBlank { "还没有写入日志文件" })
+                },
+            )
             return
         }
         showPreviewStatus(null)
@@ -1104,6 +1114,7 @@ class SaveImagePanel private constructor(
             actions: List<ImagePanelAction> = emptyList(),
             initialActionId: String? = null,
             onActionSelected: ((String) -> Unit)? = null,
+            forceSave: Boolean = false,
         ) {
             require(actions.map(ImagePanelAction::id).distinct().size == actions.size) {
                 "图片操作 ID 不能重复"
@@ -1120,6 +1131,7 @@ class SaveImagePanel private constructor(
                 actions,
                 initialActionId,
                 onActionSelected,
+                forceSave,
             ).show()
         }
     }

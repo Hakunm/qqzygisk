@@ -10,7 +10,13 @@ internal object NtKernelPicPath {
     private const val ELEMENT_PIC = 2
     private const val INFO_CLASS = "com.tencent.qqnt.kernel.nativeinterface.RichMediaFilePathInfo"
 
-    fun assemble(picElement: Any): List<String> {
+    fun assemble(picElement: Any): List<String> = runCatching {
+        assembleOrThrow(picElement)
+    }.onFailure {
+        Log.warn("内核拼路径失败", it)
+    }.getOrDefault(emptyList())
+
+    private fun assembleOrThrow(picElement: Any): List<String> {
         val service = NtMsgAccess.kernelMsgService() ?: run {
             Log.info("内核消息服务不可用，跳过 assembleMobileQQRichMediaFilePath")
             return emptyList()

@@ -22,28 +22,41 @@ internal object ChatPicOnScreen {
     private const val OUT_PATH = "/data/user/0/com.tencent.mobileqq/files/qhook_onscreen.jpg"
     private const val MIN_EDGE = 120
 
-    fun capture(context: Context, picElement: Any?): String? {
+    fun capture(context: Context, picElement: Any?): String? =
+        runCatching { captureOrThrow(context, picElement) }
+            .onFailure { Log.warn("截取聊天界面图片失败", it) }
+            .getOrNull()
+
+    private fun captureOrThrow(context: Context, picElement: Any?): String? {
         val activity = context.findActivity() ?: run {
             Log.info("保存图片时没有 Activity，无法截取界面上的图")
             return null
         }
-        val picW = intOf(picElement, "picWidth", "getPicWidth")
-        val picH = intOf(picElement, "picHeight", "getPicHeight")
+        val picW = runCatching { intOf(picElement, "picWidth", "getPicWidth") }.getOrNull()
+        val picH = runCatching { intOf(picElement, "picHeight", "getPicHeight") }.getOrNull()
         val menu = ChatMenu.lastMenuLayout
+        val root = runCatching { activity.window?.peekDecorView() ?: activity.window?.decorView }
+            .getOrNull()
+        if (root == null) {
+            Log.info("保存图片时窗口还没有 decorView")
+            return null
+        }
         val ranked = mutableListOf<ScoredView>()
-        walk(activity.window?.decorView) { view ->
-            val image = view as? ImageView ?: return@walk
-            if (menu != null && image.isDescendantOf(menu)) return@walk
-            if (image.width < MIN_EDGE || image.height < MIN_EDGE) return@walk
-            val drawable = image.drawable ?: return@walk
-            val width = drawable.intrinsicWidth.takeIf { it > 0 } ?: image.width
-            val height = drawable.intrinsicHeight.takeIf { it > 0 } ?: image.height
-            if (width < 80 || height < 80) return@walk
-            if (picW != null && picH != null && picW > 0 && picH > 0) {
-                val diff = abs(width.toFloat() / height - picW.toFloat() / picH)
-                if (diff > 0.28f) return@walk
+        walk(root) { view ->
+            runCatching {
+                val image = view as? ImageView ?: return@runCatching
+                if (menu != null && image.isDescendantOf(menu)) return@runCatching
+                if (image.width < MIN_EDGE || image.height < MIN_EDGE) return@runCatching
+                val drawable = image.drawable ?: return@runCatching
+                val width = drawable.intrinsicWidth.takeIf { it > 0 } ?: image.width
+                val height = drawable.intrinsicHeight.takeIf { it > 0 } ?: image.height
+                if (width < 80 || height < 80) return@runCatching
+                if (picW != null && picH != null && picW > 0 && picH > 0) {
+                    val diff = abs(width.toFloat() / height - picW.toFloat() / picH)
+                    if (diff > 0.28f) return@runCatching
+                }
+                ranked += ScoredView(image, width * height)
             }
-            ranked += ScoredView(image, width * height)
         }
         val best = ranked.maxByOrNull { it.area }?.view ?: run {
             Log.info("界面上没有足够大的聊天 ImageView pic=${picW}x$picH views=0")
@@ -62,7 +75,7 @@ internal object ChatPicOnScreen {
     }
 
     private fun bitmapBytes(image: ImageView): ByteArray? {
-        val drawable = image.drawable
+        val drawable = runCatching { image.drawable }.getOrNull()
         val bitmap = (drawable as? BitmapDrawable)?.bitmap?.takeIf { !it.isRecycled }
             ?: snapshot(image)
             ?: return null
@@ -84,8 +97,9 @@ internal object ChatPicOnScreen {
         if (root == null) return
         visit(root)
         val group = root as? ViewGroup ?: return
-        for (index in 0 until group.childCount) {
-            walk(group.getChildAt(index), visit)
+        val count = runCatching { group.childCount }.getOrDefault(0)
+        for (index in 0 until count) {
+            walk(runCatching { group.getChildAt(index) }.getOrNull(), visit)
         }
     }
 

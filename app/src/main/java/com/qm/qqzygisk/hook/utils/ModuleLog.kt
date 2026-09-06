@@ -58,6 +58,10 @@ object ModuleLog {
                 append(error.javaClass.simpleName)
                 append(": ")
                 append(error.message.orEmpty())
+                error.stackTrace.take(12).forEach { frame ->
+                    append(" <- ")
+                    append(frame.toString())
+                }
             }
         }
         synchronized(lock) {

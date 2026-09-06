@@ -165,6 +165,23 @@ class NtPicResolverTest {
     }
 
     @Test
+    fun remoteNtUrlStillGetsMd5Fallback() {
+        val sources = NtPicResolver.expand(
+            originUrl = "/download?appid=1406&fileid=abc&spec=0",
+            sourcePath = null,
+            thumbPaths = emptyList(),
+            md5 = "6d25abbb9c2ce067bb2abb07f117007e",
+            emojiWebUrl = null,
+            snapshot = null,
+            fileExists = { false },
+        )
+        assertTrue(sources.any { it.contains("multimedia.nt.qq.com.cn") })
+        assertTrue(
+            sources.contains("https://gchat.qpic.cn/gchatpic_new/0/0-0-6D25ABBB9C2CE067BB2ABB07F117007E/0"),
+        )
+    }
+
+    @Test
     fun extraBytesYieldDownloadAndRkey() {
         val packed = "xx/download?appid=1407&fileid=ZZZ rkey=TOKEN99".toByteArray()
         assertTrue(NtPicResolver.extractUrls(packed).any { it.startsWith("/download?appid=1407") })

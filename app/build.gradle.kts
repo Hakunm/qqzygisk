@@ -35,8 +35,8 @@ android {
         applicationId = "com.qm.qqzygisk"
         minSdk = 28
         targetSdk = 36
-        versionCode = 27
-        versionName = "2.0.8"
+        versionCode = 28
+        versionName = "2.0.9"
         ndk.abiFilters.addAll(arrayOf("armeabi-v7a", "arm64-v8a"))
     }
 

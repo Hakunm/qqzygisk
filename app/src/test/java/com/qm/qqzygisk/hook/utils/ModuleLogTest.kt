@@ -16,9 +16,12 @@ class ModuleLogTest {
             ModuleLog.clear()
             ModuleLog.append("I", "保存图片 PicElement origin=/download", null)
             ModuleLog.append("W", "图片来源失败: invalid rkey", null)
+            ModuleLog.append("E", "打开图片面板失败", NullPointerException())
             val text = ModuleLog.readTail()
             assertTrue(text.contains("保存图片 PicElement"))
             assertTrue(text.contains("invalid rkey"))
+            assertTrue(text.contains("NullPointerException"))
+            assertTrue(text.contains(" <- "))
             assertTrue(file.isFile)
             assertEqualsPath(file.absolutePath)
         } finally {
