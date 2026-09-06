@@ -1,3 +1,8 @@
+# 2.0.7
+
+- 适配 QQ 9.3.55：长按保存优先读 PicElement 本地缓存，不再把 `/data`、`/storage` 路径拼到 gchat
+- NT 图片地址补回 rkey 签名，HTTP 200 的 invalid rkey JSON 不再当成图片
+
 # 2.0.6
 
 - 从「历史」删除只把它移出历史，不再连原表情一起删

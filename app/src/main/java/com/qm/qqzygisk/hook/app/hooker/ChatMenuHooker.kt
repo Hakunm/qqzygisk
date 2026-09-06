@@ -8,6 +8,7 @@ import com.qm.qqzygisk.hook.app.chat.ChatMenu
 import com.qm.qqzygisk.hook.app.chat.ChatMenuPosition
 import com.qm.qqzygisk.hook.app.chat.ChatMenuType
 import com.qm.qqzygisk.hook.app.chat.NtImageRkeyProvider
+import com.qm.qqzygisk.hook.app.chat.NtPicResolver
 import com.qm.qqzygisk.hook.app.chat.SaveImagePanel
 import com.qm.qqzygisk.hook.utils.HookSettings
 import com.qm.qqzygisk.hook.utils.Log
@@ -43,61 +44,14 @@ object ChatMenuHooker : BaseHooker() {
         picElement: Any,
     ) {
         runCatching {
-            SaveImagePanel.show(context, resolveImageUrls(picElement))
+            val sources = NtPicResolver.resolve(picElement)
+            if (sources.isEmpty()) {
+                Log.warn("PicElement 没有可用的本地路径或图片地址")
+            }
+            SaveImagePanel.show(context, sources)
         }.onFailure {
             Log.error("打开图片面板失败", it)
             Toast.makeText(context, "无法打开图片面板", Toast.LENGTH_SHORT).show()
         }
     }
-
-    private fun resolveImageUrls(picElement: Any): List<String> {
-        val originUrl = invokeStringGetter(picElement, "getOriginImageUrl").orEmpty()
-        val candidates =
-            when {
-                originUrl.startsWith("https://") || originUrl.startsWith("http://") -> {
-                    listOf(originUrl)
-                }
-
-                originUrl.startsWith("/download") -> {
-                    val ntUrl = "https://multimedia.nt.qq.com.cn$originUrl"
-                    val signedUrl =
-                        if (originUrl.contains("rkey=")) {
-                            ntUrl
-                        } else {
-                            NtImageRkeyProvider.get(originUrl)?.let { appendRkey(ntUrl, it) }
-                        }
-                    listOfNotNull(signedUrl, ntUrl)
-                }
-
-                originUrl.startsWith("/") -> {
-                    listOf("https://gchat.qpic.cn$originUrl")
-                }
-
-                else -> {
-                    emptyList()
-                }
-            }
-        return candidates.distinct()
-    }
-
-    private fun appendRkey(
-        imageUrl: String,
-        rkey: String,
-    ): String {
-        val separator =
-            when {
-                imageUrl.endsWith('?') || imageUrl.endsWith('&') -> ""
-                imageUrl.contains('?') -> "&"
-                else -> "?"
-            }
-        return imageUrl + separator + rkey.removePrefix("?").removePrefix("&")
-    }
-
-    private fun invokeStringGetter(
-        instance: Any,
-        methodName: String,
-    ): String? =
-        runCatching {
-            instance.javaClass.getMethod(methodName).invoke(instance) as? String
-        }.getOrNull()
 }
