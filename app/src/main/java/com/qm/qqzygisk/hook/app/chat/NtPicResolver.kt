@@ -45,8 +45,11 @@ internal object NtPicResolver {
         remoteUrls(originUrl, snapshot, fileExists).forEach(sources::add)
         emojiWebUrl?.takeIf { it.startsWith("http://") || it.startsWith("https://") }
             ?.let(sources::add)
-        md5?.takeIf { it.isNotBlank() && sources.none { candidate -> candidate.startsWith("http") } }
-            ?.let { sources += "$GCHAT_HOST/gchatpic_new/0/0-0-${it.uppercase()}/0" }
+        if (sources.isEmpty()) {
+            md5?.takeIf { it.isNotBlank() }?.let {
+                sources += "$GCHAT_HOST/gchatpic_new/0/0-0-${it.uppercase()}/0"
+            }
+        }
         return sources.toList()
     }
 
