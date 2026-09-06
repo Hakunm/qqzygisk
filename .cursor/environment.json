@@ -1,0 +1,18 @@
+{
+  "name": "qqhook Android/Zygisk module",
+  "user": "ubuntu",
+  "install": "bash .cursor/install.sh",
+  "terminals": [
+    {
+      "name": "WebUI dev server",
+      "command": "cd webroot && pnpm dev --host 0.0.0.0 --port 5173",
+      "description": "Vite dev server for the KernelSU WebUI (webroot). Note: the WebUI calls the on-device KernelSU runtime, so some actions only work when served inside the KernelSU/Magisk manager app."
+    }
+  ],
+  "ports": [
+    {
+      "name": "WebUI dev server",
+      "port": 5173
+    }
+  ]
+}
