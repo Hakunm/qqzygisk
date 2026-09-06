@@ -46,9 +46,12 @@ object ImageDownloader {
         val failure = IllegalStateException("所有图片请求都失败了")
         urls.forEach { url ->
             runCatching { return fetch(url, maxBytes) }
-                .exceptionOrNull()
-                ?.let(failure::addSuppressed)
+                .onFailure { error ->
+                    failure.addSuppressed(error)
+                    Log.warn("图片来源失败: ${error.message} url=${url.take(180)}")
+                }
         }
+        Log.warn("全部 ${urls.size} 个图片来源都失败了")
         throw failure
     }
 
@@ -91,7 +94,10 @@ object ImageDownloader {
                 output.toByteArray()
             }
             check(ImagePayload.isImage(bytes)) {
-                "图片响应不是图像数据: ${url.take(80)}"
+                val head = bytes.decodeToString(0, minOf(bytes.size, 72))
+                    .replace('\n', ' ')
+                    .replace('\r', ' ')
+                "图片响应不是图像数据: ${url.take(80)} head=$head"
             }
             DownloadedImage(bytes, extensionOf(url, connection.contentType))
         } finally {

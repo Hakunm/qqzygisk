@@ -32,6 +32,7 @@ object Log {
             "E" -> Log.e(LSP, data.toString(), data.throwable)
             else -> Log.wtf(LSP, data.toString(), data.throwable)
         }
+        runCatching { ModuleLog.append(data.priority, data.msg, data.throwable) }
     }
 
     fun debug(msg: Any? = null, e: Throwable? = null) {

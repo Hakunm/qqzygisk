@@ -1,3 +1,9 @@
+# 2.0.8
+
+- 再修 9.3.55 长按保存裂图：问内核拼路径、扫 chatpic/nt_data 缓存，并用聊天界面上已经显示的图兜底
+- NT 地址补 spec=0，fileUuid / ExtraData 里的 download、rkey 也会用上
+- 日志不再只进 logcat：写到 `.qhook/qhook.log`，保存失败时面板上直接显示，设置页和 KernelSU WebUI 也能看、复制
+
 # 2.0.7
 
 - 适配 QQ 9.3.55：长按保存优先读 PicElement 本地缓存，不再把 `/data`、`/storage` 路径拼到 gchat
