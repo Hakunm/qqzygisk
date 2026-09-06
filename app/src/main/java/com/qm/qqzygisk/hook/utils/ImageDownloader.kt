@@ -3,7 +3,9 @@ package com.qm.qqzygisk.hook.utils
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import java.io.ByteArrayOutputStream
+import java.io.File
 import java.net.HttpURLConnection
+import java.net.URI
 import java.net.URL
 
 /**
@@ -54,6 +56,13 @@ object ImageDownloader {
         url: String,
         maxBytes: Int = DEFAULT_MAX_BYTES,
     ): DownloadedImage {
+        localFile(url)?.let { file ->
+            check(file.isFile && file.canRead()) { "本地图片不可读: ${file.absolutePath}" }
+            check(file.length() <= maxBytes) { "图片超过 $maxBytes 字节" }
+            val bytes = file.readBytes()
+            check(ImagePayload.isImage(bytes)) { "本地文件不是图片: ${file.absolutePath}" }
+            return DownloadedImage(bytes, extensionOf(file.name, null))
+        }
         val connection = URL(url).openConnection() as HttpURLConnection
         return try {
             connection.connectTimeout = 10_000
@@ -81,10 +90,22 @@ object ImageDownloader {
                 }
                 output.toByteArray()
             }
+            check(ImagePayload.isImage(bytes)) {
+                "图片响应不是图像数据: ${url.take(80)}"
+            }
             DownloadedImage(bytes, extensionOf(url, connection.contentType))
         } finally {
             connection.disconnect()
         }
+    }
+
+    private fun localFile(url: String): File? {
+        if (url.startsWith("file:")) {
+            return runCatching { File(URI(url)) }.getOrNull()
+        }
+        if (url.startsWith("http://") || url.startsWith("https://")) return null
+        val file = File(url)
+        return file.takeIf { it.isAbsolute && it.isFile }
     }
 
     fun decode(

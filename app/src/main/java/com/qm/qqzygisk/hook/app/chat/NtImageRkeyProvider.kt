@@ -8,13 +8,8 @@ import java.lang.reflect.Method
 import java.util.concurrent.ConcurrentHashMap
 
 internal object NtImageRkeyProvider {
-    private const val RKEY_SERVICE_COMMAND = "OidbSvcTrpcTcp.0x9067_202"
-
     @Volatile
-    private var groupRkey: String? = null
-
-    @Volatile
-    private var privateRkey: String? = null
+    private var snapshot: RkeySnapshot? = null
 
     private val wupBufferMethods = ConcurrentHashMap<Class<*>, Method>()
 
@@ -33,9 +28,15 @@ internal object NtImageRkeyProvider {
         )
         fromType.resolve().firstMethod { name = "getServiceCmd" }.hook {
             after {
-                if (result != RKEY_SERVICE_COMMAND) return@after
+                val command = result as? String ?: return@after
                 val fromServiceMsg = instance ?: return@after
-                runCatching { applyFromServiceMsg(fromServiceMsg) }.onFailure {
+                val buffer = wupBuffer(fromServiceMsg)
+                if (!NtImageRkey.isRkeyCommand(command)) {
+                    if (!command.startsWith("OidbSvcTrpcTcp") || !NtImageRkey.containsRkey(buffer)) {
+                        return@after
+                    }
+                }
+                runCatching { applyFromServiceMsg(command, buffer) }.onFailure {
                     Log.error("捕获 NT 图片 rkey 失败", it)
                 }
             }
@@ -43,136 +44,41 @@ internal object NtImageRkeyProvider {
         Log.debug("已挂钩 FromServiceMsg.getServiceCmd process=${currentProcessName()}")
     }
 
-    fun get(originUrl: String): String? =
-        if (originUrl.contains("appid=1406")) groupRkey else privateRkey
+    fun snapshot(): RkeySnapshot? = snapshot
 
-    private fun applyFromServiceMsg(fromServiceMsg: Any) {
-        val resultCode = runCatching {
-            fromServiceMsg.javaClass.getMethod("getResultCode").invoke(fromServiceMsg)
-        }.getOrNull()
+    fun get(originUrl: String): String? =
+        snapshot?.let { NtImageRkey.select(originUrl, it) }
+
+    fun sign(url: String): String {
+        if (!NtImageRkey.needsRkey(url)) return url
+        val rkey = get(url) ?: return url
+        return NtImageRkey.apply(url, rkey)
+    }
+
+    private fun applyFromServiceMsg(command: String, buffer: ByteArray?) {
+        Log.debug(
+            "收到 rkey 回包 process=${currentProcessName()} cmd=$command bytes=${buffer?.size ?: -1}",
+        )
+        if (buffer == null) return
+        val unpacked = NtImageRkey.unpackWup(buffer)
+        val parsed = NtImageRkey.parseOrScan(unpacked, System.currentTimeMillis())
+        snapshot = parsed
+        Log.debug(
+            "已更新 NT 图片 rkey process=${currentProcessName()} " +
+                "types=${parsed.byType.keys} private=${parsed.byType[NtImageRkey.TYPE_PRIVATE] != null} " +
+                "group=${parsed.byType[NtImageRkey.TYPE_GROUP] != null}",
+        )
+    }
+
+    private fun wupBuffer(fromServiceMsg: Any): ByteArray? {
         val getWupBuffer =
             wupBufferMethods[fromServiceMsg.javaClass]
                 ?: fromServiceMsg.javaClass.getMethod("getWupBuffer").also {
                     wupBufferMethods[fromServiceMsg.javaClass] = it
                 }
-        val buffer = getWupBuffer.invoke(fromServiceMsg) as? ByteArray
-        Log.debug(
-            "收到 0x9067_202 process=${currentProcessName()} result=$resultCode bytes=${buffer?.size ?: -1}",
-        )
-        if (buffer == null) return
-        val (newGroupRkey, newPrivateRkey) = parseRkeys(unpackWupBuffer(buffer))
-        groupRkey = newGroupRkey
-        privateRkey = newPrivateRkey
-        Log.debug(
-            "已更新 NT 图片 rkey process=${currentProcessName()} " +
-                "group=${newGroupRkey.isNotBlank()} private=${newPrivateRkey.isNotBlank()}",
-        )
+        return getWupBuffer.invoke(fromServiceMsg) as? ByteArray
     }
 
     private fun currentProcessName(): String =
         runCatching { android.app.Application.getProcessName() }.getOrNull().orEmpty()
-
-    private fun unpackWupBuffer(buffer: ByteArray): ByteArray =
-        if (buffer.size >= 4 && buffer[0].toInt() == 0) {
-            buffer.copyOfRange(4, buffer.size)
-        } else {
-            buffer
-        }
-
-    private fun parseRkeys(buffer: ByteArray): Pair<String, String> {
-        val response =
-            lengthDelimitedFields(buffer, 4).firstOrNull()
-                ?: error("NT 图片 rkey 响应缺少字段 4")
-        val downloadInfo =
-            lengthDelimitedFields(response, 4).firstOrNull()
-                ?: error("NT 图片 rkey 缺少下载信息")
-        val entries = lengthDelimitedFields(downloadInfo, 1)
-        check(entries.size >= 2) { "NT 图片 rkey 条目不足" }
-
-        return readRkey(entries[0]) to readRkey(entries[1])
-    }
-
-    private fun readRkey(entry: ByteArray): String {
-        val value =
-            lengthDelimitedFields(entry, 1).firstOrNull()
-                ?: error("NT 图片 rkey 值为空")
-        return value
-            .toString(Charsets.UTF_8)
-            .trimEnd('\u0000')
-            .takeIf { it.contains("rkey=") }
-            ?: error("无效的 NT 图片 rkey")
-    }
-
-    private fun lengthDelimitedFields(
-        data: ByteArray,
-        fieldNumber: Int,
-    ): List<ByteArray> {
-        val values = mutableListOf<ByteArray>()
-        var offset = 0
-        while (offset < data.size) {
-            val tag = readVarint(data, offset)
-            offset = tag.nextOffset
-            check(tag.value != 0L) { "无效的 protobuf tag" }
-
-            when ((tag.value and 7).toInt()) {
-                0 -> {
-                    offset = readVarint(data, offset).nextOffset
-                }
-
-                1 -> {
-                    offset = checkedOffset(offset, 8, data.size)
-                }
-
-                2 -> {
-                    val lengthValue = readVarint(data, offset)
-                    offset = lengthValue.nextOffset
-                    check(lengthValue.value <= Int.MAX_VALUE) { "protobuf 字段过大" }
-                    val endOffset = checkedOffset(offset, lengthValue.value.toInt(), data.size)
-                    if ((tag.value ushr 3).toInt() == fieldNumber) {
-                        values += data.copyOfRange(offset, endOffset)
-                    }
-                    offset = endOffset
-                }
-
-                5 -> {
-                    offset = checkedOffset(offset, 4, data.size)
-                }
-
-                else -> {
-                    error("不支持的 protobuf wire type: ${tag.value and 7}")
-                }
-            }
-        }
-        return values
-    }
-
-    private fun checkedOffset(
-        offset: Int,
-        byteCount: Int,
-        size: Int,
-    ): Int {
-        check(byteCount >= 0 && offset <= size - byteCount) { "protobuf 字段被截断" }
-        return offset + byteCount
-    }
-
-    private fun readVarint(
-        data: ByteArray,
-        startOffset: Int,
-    ): Varint {
-        var offset = startOffset
-        var value = 0L
-        var shift = 0
-        while (offset < data.size && shift < Long.SIZE_BITS) {
-            val current = data[offset++].toInt() and 0xff
-            value = value or ((current and 0x7f).toLong() shl shift)
-            if (current and 0x80 == 0) return Varint(value, offset)
-            shift += 7
-        }
-        error("无效的 protobuf varint")
-    }
-
-    private data class Varint(
-        val value: Long,
-        val nextOffset: Int,
-    )
 }
