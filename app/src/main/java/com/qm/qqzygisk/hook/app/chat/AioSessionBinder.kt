@@ -9,6 +9,7 @@ import android.view.ViewGroup
 import com.qm.qqzygisk.hook.app.data.HostData.appClassLoader
 import com.qm.qqzygisk.hook.extension.hook
 import com.qm.qqzygisk.hook.utils.HostClassScanner
+import com.qm.qqzygisk.hook.utils.HostTargetCache
 import com.qm.qqzygisk.hook.utils.Log
 import com.qm.qqzygisk.hook.utils.ShapeSelector
 import java.lang.ref.WeakReference
@@ -25,9 +26,9 @@ import java.util.WeakHashMap
  * 设计要点：
  * - 不缓存“当前会话”。每次解析都从触摸的 View 向上找到绑定根，再实时读取该 ChatPie 的
  *   AIOParam 字段，因此切换聊天/复用 View 不会用到旧会话。
- * - 只用类型/结构定位成员：AIOParam 实例字段、(Fragment,LayoutInflater,ViewGroup,boolean)->View
- *   的创建根方法、AIOSession 字段、以及 AIOUtil 的 (AIOSession)->Contact 单例转换器。
- *   成员改名后仍可命中；匹配不唯一时显式失败。
+ * - 首次按类型/结构定位成员；后续同版本从 JSON 直接恢复类和成员，不重新筛选。
+ *   定位包含 AIOParam 字段、创建根方法、AIOSession 字段及 AIOUtil 的会话转换器。
+ *   首次匹配不唯一时显式失败；同版本恢复失败不重新定位。
  * - 只服务仍然 attached、shown、且所属窗口可见（windowVisibility==VISIBLE）、
  *   并且其所有者当前根字段仍指向该 View 的绑定根；预加载/隐藏/已解绑/已停止 Activity 的根一律不服务。
  * - 面板打开时记录会话身份，发送前重新解析并比对：聊天已切换则明确失败，绝不静默发给新会话。
@@ -222,23 +223,29 @@ internal object AioSessionBinder {
     private fun View.isLiveInWindow(): Boolean =
         isAttachedToWindow && isShown && windowVisibility == View.VISIBLE
 
-    private fun resolve(): Binding {
-        val aioParamType = loadClass(AIO_PARAM_CLASS)
-        val fragmentBase = loadClass(FRAGMENT_CLASS)
-        val chatPie = resolveChatPie(aioParamType, fragmentBase)
-        val createRoot = chatPie.declaredMethods.first { isCreateRoot(it, fragmentBase) }.apply { isAccessible = true }
-        val rootField = uniqueField(chatPie, View::class.java, "聊天根 View 字段")
-        val aioParamField = uniqueField(chatPie, aioParamType, "AIOParam 字段")
-        val aioSessionField = uniqueField(aioParamType, loadClass(AIO_SESSION_CLASS), "AIOSession 字段")
-        val converter = resolveSessionConverter()
-        return Binding(
+    private fun resolve(): Binding = HostTargetCache.resolve("qq-aio-session", appClassLoader) { targets ->
+        val aioParamType by lazy { loadClass(AIO_PARAM_CLASS) }
+        val fragmentBase by lazy { loadClass(FRAGMENT_CLASS) }
+        val chatPie = targets.type("chatPie") { resolveChatPie(aioParamType, fragmentBase) }
+        val createRoot = targets.method("createRoot") {
+            chatPie.declaredMethods.first { isCreateRoot(it, fragmentBase) }
+        }
+        val rootField = targets.field("rootField") { uniqueField(chatPie, View::class.java, "聊天根 View 字段") }
+        val aioParamField = targets.field("aioParamField") { uniqueField(chatPie, aioParamType, "AIOParam 字段") }
+        val aioSessionField = targets.field("aioSessionField") {
+            uniqueField(aioParamType, loadClass(AIO_SESSION_CLASS), "AIOSession 字段")
+        }
+        val converter by lazy { resolveSessionConverter() }
+        val converterOwner = targets.field("converterOwner") { converter.first }
+        val converterMethod = targets.method("converter") { converter.second }
+        Binding(
             chatPie = chatPie,
             createRoot = createRoot,
             rootField = rootField,
             aioParamField = aioParamField,
             aioSessionField = aioSessionField,
-            converterOwner = converter.first,
-            converter = converter.second,
+            converterOwner = converterOwner.get(null) ?: error("$AIO_UTIL_CLASS 单例为空"),
+            converter = converterMethod,
         )
     }
 
@@ -305,14 +312,13 @@ internal object AioSessionBinder {
      * AIOUtil 的 (AIOSession)->Contact 转换器。
      * 单例通过「类型为自身的静态字段」结构化取得，转换方法按签名唯一选取。
      */
-    private fun resolveSessionConverter(): Pair<Any, Method> {
+    private fun resolveSessionConverter(): Pair<Field, Method> {
         val utilType = loadClass(AIO_UTIL_CLASS)
         val sessionType = loadClass(AIO_SESSION_CLASS)
         val contactType = loadClass(CONTACT_CLASS)
         val singletons = utilType.declaredFields.filter { Modifier.isStatic(it.modifiers) && it.type == utilType }
         check(singletons.size == 1) { "$AIO_UTIL_CLASS 单例字段定位失败: ${singletons.size} 个" }
-        singletons.single().isAccessible = true
-        val owner = singletons.single().get(null) ?: error("$AIO_UTIL_CLASS 单例为空")
+        val ownerField = singletons.single().apply { isAccessible = true }
         val converter = ShapeSelector.pickUnique(
             "$AIO_UTIL_CLASS 会话转联系人方法",
             utilType.declaredMethods.filter { !Modifier.isStatic(it.modifiers) },
@@ -320,7 +326,7 @@ internal object AioSessionBinder {
             predicate = { method -> ShapeSelector.matches(method, listOf(sessionType), contactType) },
         ).found()
         converter.isAccessible = true
-        return owner to converter
+        return ownerField to converter
     }
 
     /** [ShapeSelector.Pick] 的唯一命中值；0 个或多个命中时抛出 [ShapeSelector.Pick.Rejected] 的诊断。 */

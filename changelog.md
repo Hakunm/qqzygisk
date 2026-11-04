@@ -1,3 +1,21 @@
+# qqhook v1.28
+
+QQ 的目标定位结果改用可读 JSON 保存，同版本冷启动直接恢复已定位的类和成员，不再重复扫描候选。
+
+## 优化
+
+- 设置入口、设置分组、聊天会话绑定和相机编辑器分别保存定位结果，同版本启动直接恢复，不再全量枚举类名或重复筛选候选。
+- 缓存使用可读 JSON，保存在 QQ 私有目录，无需额外存储权限。
+- 仅按 QQ 的 `versionCode + versionName` 区分缓存，不检查 DEX 来源；版本变化时重新定位，同版本恢复失败不自动重新定位。
+
+## 下载
+
+| 平台 | 安装包 | 架构 |
+| --- | --- | --- |
+| Android 9 及以上（Zygisk 模块） | [qqhook.zip](https://github.com/Night-stars-1/qqzygisk/releases/download/v1.28/qqhook.zip) | arm64-v8a、armeabi-v7a |
+
+[完整变更：v1.27...v1.28](https://github.com/Night-stars-1/qqzygisk/compare/v1.27...v1.28)
+
 # qqhook v1.27
 
 模块更新改为按实际接收字节显示下载进度，避免进度条长时间停在 0% 后直接跳到完成。关闭更新弹窗后继续下载，宿主进程退出后可在重新打开设置时恢复未完成任务。

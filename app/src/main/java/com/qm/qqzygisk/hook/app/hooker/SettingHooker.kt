@@ -6,6 +6,7 @@ import com.qm.qqzygisk.hook.app.base.BaseHooker
 import com.qm.qqzygisk.hook.app.data.HostData.appClassLoader
 import com.qm.qqzygisk.hook.extension.hook
 import com.qm.qqzygisk.hook.utils.HostClassScanner
+import com.qm.qqzygisk.hook.utils.HostTargetCache
 import com.qm.qqzygisk.hook.utils.Log
 import com.qm.qqzygisk.hook.utils.ShapeSelector
 import com.qm.qqzygisk.hook.utils.startModuleSettings
@@ -95,21 +96,27 @@ object SettingHooker : BaseHooker() {
 
     override fun initOnce() {
         // 只解析、不初始化宿主类；真正的实例化发生在宿主已经自己创建过这些对象的回调里。
-        val function0 = runCatching { Class.forName(FUNCTION0_CLASS, false, appClassLoader) }.getOrNull()
-        val item = findItemProcessor(function0)
-        itemConstructor = item.second
-        itemClickSetter = item.third
-
-        val provider = findProvider()
+        val targets = HostTargetCache.resolve("qq-settings", appClassLoader) { cache ->
+            val item by lazy {
+                val function0 = runCatching { Class.forName(FUNCTION0_CLASS, false, appClassLoader) }.getOrNull()
+                findItemProcessor(function0)
+            }
+            Triple(
+                cache.constructor("itemConstructor") { item.second },
+                cache.method("itemClickSetter") { item.third },
+                cache.method("provider") { findProvider().second },
+            )
+        }
+        itemConstructor = targets.first
+        itemClickSetter = targets.second
+        val provider = targets.third
         Log.info(
-            "settings_entry 目标解析完成: item=${item.first.name} ctor=${ShapeSelector.signature(item.second)} " +
-                "setter=${ShapeSelector.signature(item.third)} provider=${provider.first.name} " +
-                "method=${ShapeSelector.signature(provider.second)} " +
-                "(扫描 processor=${HostClassScanner.classesInPackage(PROCESSOR_PACKAGE).size} " +
-                "main=${HostClassScanner.classesInPackage(PROVIDER_PACKAGE).size})",
+            "settings_entry 目标解析完成: item=${targets.first.declaringClass.name} " +
+                "ctor=${ShapeSelector.signature(targets.first)} setter=${ShapeSelector.signature(targets.second)} " +
+                "provider=${provider.declaringClass.name} method=${ShapeSelector.signature(provider)}",
         )
 
-        provider.second.hook {
+        provider.hook {
             after {
                 val hostResult = result
                 try {
@@ -126,7 +133,7 @@ object SettingHooker : BaseHooker() {
                 }
             }
         }
-        Log.info("settings_entry 已挂载: ${ShapeSelector.signature(provider.second)}")
+        Log.info("settings_entry 已挂载: ${ShapeSelector.signature(provider)}")
     }
 
     /**
@@ -209,24 +216,27 @@ object SettingHooker : BaseHooker() {
             return groups
         }
 
-        // 只读探测：真实分组对象的类必须唯一且带可用构造器。
-        val groupClasses = groups.mapNotNull { it?.javaClass }.distinct()
-        val groupClass = ShapeSelector.pickUnique(
-            "宿主设置分组类(需带 (List,CharSequence,CharSequence) 构造器)",
-            groupClasses,
-            { it.name },
-        ) { candidate ->
-            candidate.declaredConstructors.any { ctor -> groupConstructorShapes.any { it.matches(ctor) } }
-        }.orFail("(宿主返回 ${groups.size} 个分组)")
-
-        val constructor = ShapeSelector.pickPreferred(
-            "分组构造器 (List,CharSequence,CharSequence)",
-            groupClass.declaredConstructors.toList(),
-            groupConstructorShapes,
-            ShapeSelector::signature,
-        ).orFail("(分组类 ${groupClass.name})")
-        // pickPreferred 先试真实三参构造器，命中即非合成。
-        val masked = !ShapeSelector.matches(constructor, groupConstructorParameterTypes)
+        val constructor = HostTargetCache.resolve("qq-settings-group", appClassLoader) { targets ->
+            targets.constructor("groupConstructor") {
+                // 首次从宿主真实返回的分组中定位；同版本直接恢复 JSON 中的构造器。
+                val groupClasses = groups.mapNotNull { it?.javaClass }.distinct()
+                val groupClass = ShapeSelector.pickUnique(
+                    "宿主设置分组类(需带 (List,CharSequence,CharSequence) 构造器)",
+                    groupClasses,
+                    { it.name },
+                ) { candidate ->
+                    candidate.declaredConstructors.any { ctor -> groupConstructorShapes.any { it.matches(ctor) } }
+                }.orFail("(宿主返回 ${groups.size} 个分组)")
+                ShapeSelector.pickPreferred(
+                    "分组构造器 (List,CharSequence,CharSequence)",
+                    groupClass.declaredConstructors.toList(),
+                    groupConstructorShapes,
+                    ShapeSelector::signature,
+                ).orFail("(分组类 ${groupClass.name})")
+            }
+        }
+        val groupClass = constructor.declaringClass
+        val masked = constructor.parameterCount == 5
 
         val iconRes = context.resources.getIdentifier(ITEM_ICON, "drawable", context.packageName)
         val entry = createEntryItem(context, iconRes)

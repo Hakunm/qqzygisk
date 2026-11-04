@@ -2,6 +2,7 @@ package com.qm.qqzygisk.hook.utils
 
 import com.qm.qqzygisk.hook.app.data.HostData.appClassLoader
 import dalvik.system.BaseDexClassLoader
+import dalvik.system.DexFile
 import java.util.concurrent.ConcurrentHashMap
 
 /**
@@ -11,8 +12,8 @@ import java.util.concurrent.ConcurrentHashMap
  * 类名硬编码只适配单版本。改为按"包前缀 + 成员签名特征"在清单里搜目标类，
  * 混淆名变化也能命中。
  *
- * 清单来自 `BaseDexClassLoader.pathList.dexElements[].dexFile.entries()`，
- * 与运行时类加载器同源，进程内只枚举一次后缓存。
+ * 清单来自 `BaseDexClassLoader.pathList.dexElements[].dexFile.entries()`，仅在首次目标定位
+ * 时按需枚举并在进程内复用；跨启动只保存目标定位结果，不保存全量类名清单。
  */
 internal object HostClassScanner {
     private class ClassIndex(val loader: ClassLoader, val names: Set<String>) {
@@ -39,8 +40,7 @@ internal object HostClassScanner {
                 for (element in elements) {
                     if (element == null) continue
                     val dexFile = element.javaClass.getDeclaredField("dexFile")
-                        .apply { isAccessible = true }.get(element) as? dalvik.system.DexFile
-                        ?: continue
+                        .apply { isAccessible = true }.get(element) as? DexFile ?: continue
                     val entries = dexFile.entries()
                     while (entries.hasMoreElements()) result.add(entries.nextElement())
                 }

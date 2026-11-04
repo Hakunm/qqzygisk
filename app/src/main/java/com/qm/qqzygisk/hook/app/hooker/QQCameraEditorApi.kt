@@ -7,6 +7,7 @@ import android.os.Parcelable
 import android.os.SystemClock
 import com.qm.qqzygisk.hook.app.data.HostData.appClassLoader
 import com.qm.qqzygisk.hook.utils.HostClassScanner
+import com.qm.qqzygisk.hook.utils.HostTargetCache
 import com.qm.qqzygisk.hook.utils.Log
 import com.qm.qqzygisk.hook.utils.ShapeSelector
 import java.lang.reflect.Constructor
@@ -27,8 +28,9 @@ import java.lang.reflect.Modifier
  *   （视频配置不满足这个组合）；
  * - 照片配置的静态嵌套 builder：`(int)` 构造器 + 无参实例方法返回照片配置。
  *
- * 任何一步 0 命中或多命中都抛错，绝不“取第一个命中”。解析结果按
- * [ClassLoader] 身份缓存，失败不缓存。
+ * 首次定位时任何一步 0 命中或多命中都抛错，绝不“取第一个命中”。成功目标按
+ * versionCode + versionName 保存为 JSON，同版本直接恢复，失败不重新定位；
+ * 当前进程的反射对象另按 [ClassLoader] 身份复用。
  */
 internal object QQCameraEditorApi {
 
@@ -120,6 +122,23 @@ internal object QQCameraEditorApi {
             jumpMethod.invoke(null, activity, photoResult, entrance, null, EDIT_VIDEO_WAY)
         }
 
+        internal fun remember(targets: HostTargetCache.Targets) {
+            targets.type("photoResultClass") { photoResultClass }
+            targets.type("entranceClass") { entranceClass }
+            targets.type("photoConfigClass") { photoConfigClass }
+            targets.type("builderClass") { builderClass }
+            targets.constructor("photoResultConstructor") { photoResultConstructor }
+            targets.constructor("entranceConstructor") { entranceConstructor }
+            targets.method("entranceConfigSetter") { entranceConfigSetter }
+            targets.constructor("builderConstructor") { builderConstructor }
+            targets.method("builderConfigFactory") { builderConfigFactory }
+            targets.method("builderSessionSetter") { builderSessionSetter }
+            targets.method("builderClassNameSetter") { builderClassNameSetter }
+            targets.method("builderPhotoCountSetter") { builderPhotoCountSetter }
+            targets.method("builderSubBusinessSetter") { builderSubBusinessSetter }
+            targets.method("jumpMethod") { jumpMethod }
+        }
+
         /** 全部命中目标的完整签名，用于日志与版本验证。 */
         fun describe(): String = buildString {
             append("result=").append(ShapeSelector.signature(photoResultConstructor))
@@ -146,7 +165,7 @@ internal object QQCameraEditorApi {
      * 解析宿主编辑器契约。
      *
      * 只用 `HostData.appClassLoader`（验证时先 `HostData.init(loader)` 再调用即可），
-     * 成功结果按该 ClassLoader 身份缓存，失败不缓存。
+     * 首次成功定位持久化 JSON；同版本直接恢复，当前进程再按 ClassLoader 身份复用。
      */
     internal fun resolve(): Contract {
         val loader = appClassLoader
@@ -154,7 +173,10 @@ internal object QQCameraEditorApi {
         synchronized(this) {
             cached?.takeIf { it.loader === loader }?.let { return it }
             val startedAt = SystemClock.uptimeMillis()
-            val contract = detect(loader)
+            val contract = HostTargetCache.resolve("qq-camera-editor", loader) { targets ->
+                if (targets.cached) restore(loader, targets)
+                else detect(loader).also { it.remember(targets) }
+            }
             cached = contract
             Log.info(
                 "QQ图片编辑器契约解析完成: ${SystemClock.uptimeMillis() - startedAt}ms " +
@@ -163,6 +185,24 @@ internal object QQCameraEditorApi {
             return contract
         }
     }
+
+    private fun restore(loader: ClassLoader, targets: HostTargetCache.Targets): Contract = Contract(
+        loader = loader,
+        photoResultClass = targets.type("photoResultClass"),
+        entranceClass = targets.type("entranceClass"),
+        photoConfigClass = targets.type("photoConfigClass"),
+        builderClass = targets.type("builderClass"),
+        photoResultConstructor = targets.constructor("photoResultConstructor"),
+        entranceConstructor = targets.constructor("entranceConstructor"),
+        entranceConfigSetter = targets.method("entranceConfigSetter"),
+        builderConstructor = targets.constructor("builderConstructor"),
+        builderConfigFactory = targets.method("builderConfigFactory"),
+        builderSessionSetter = targets.method("builderSessionSetter"),
+        builderClassNameSetter = targets.method("builderClassNameSetter"),
+        builderPhotoCountSetter = targets.method("builderPhotoCountSetter"),
+        builderSubBusinessSetter = targets.method("builderSubBusinessSetter"),
+        jumpMethod = targets.method("jumpMethod"),
+    )
 
     private fun detect(loader: ClassLoader): Contract {
         val intType = Int::class.javaPrimitiveType!!
