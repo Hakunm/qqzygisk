@@ -25,11 +25,201 @@ package com.qm.qqzygisk.hook.app.chat
  * the group packet's outer field 37 hold different numbers and are never used;
  * navigating with them opens the conversation at the wrong message.
  *
- * `InfoSyncPush` is deliberately ignored: it is a batched offline sync packet and
- * dropping it would lose real messages.
+ * InfoSyncPush is filtered at the known offline group-recall path without dropping
+ * the surrounding sync packet or reserializing unrelated protobuf fields.
  */
 internal object RevokePushParser {
     const val CMD_MSG_PUSH = "trpc.msg.olpush.OlPushService.MsgPush"
+    const val CMD_INFO_SYNC_PUSH = "trpc.msg.register_proxy.RegisterProxy.InfoSyncPush"
+
+    data class FilteredSync(val payload: ByteArray, val recalls: List<RecallPush>)
+
+    /** Removes only positively identified other-user group recalls from offline sync. */
+    fun filterInfoSync(proto: ByteArray, selfUid: String): FilteredSync? {
+        if (!NtMsgAccess.isUid(selfUid)) return null
+        val recalls = ArrayList<RecallPush>()
+        return try {
+            val payload = filterSyncContainer(proto, 0, proto.size, 0, selfUid, recalls) ?: return null
+            FilteredSync(payload, recalls)
+        } catch (_: IllegalArgumentException) {
+            null
+        }
+    }
+
+    // The only established path is InfoSyncPush.8 -> sync_msg_recall.4 -> body.8.
+    // Unchanged fields are copied as original wire bytes, including noncanonical tags.
+    private fun filterSyncContainer(
+        buf: ByteArray,
+        start: Int,
+        end: Int,
+        depth: Int,
+        selfUid: String,
+        recalls: MutableList<RecallPush>,
+    ): ByteArray? {
+        var bodyGroup: Long? = null
+        if (depth == 2) {
+            scanWire(buf, start, end) { field ->
+                if (field.number == 2 && field.wire == 2) {
+                    val peer = String(buf, field.valueStart, field.end - field.valueStart, Charsets.UTF_8)
+                    bodyGroup = if (peer.isNotEmpty() && peer.all { it in '0'..'9' }) peer.toLongOrNull()?.takeIf { it > 0 } else null
+                }
+            }
+            if (bodyGroup == null) return null
+        }
+        var output: java.io.ByteArrayOutputStream? = null
+        var copied = start
+        scanWire(buf, start, end) { field ->
+            val target = when (depth) { 0 -> 8; 1 -> 4; else -> 8 }
+            if (field.number == target && field.wire == 2) {
+                if (depth == 2) {
+                    val recall = inspectSyncMessage(buf, field.valueStart, field.end)
+                    if (recall != null && recall.operatorUid != selfUid && recall.peerCandidates.single() == bodyGroup.toString()) {
+                        val out = output ?: java.io.ByteArrayOutputStream().also { output = it }
+                        out.write(buf, copied, field.start - copied)
+                        copied = field.end
+                        recalls.add(recall)
+                    }
+                } else {
+                    val replacement = filterSyncContainer(buf, field.valueStart, field.end, depth + 1, selfUid, recalls)
+                    if (replacement != null) {
+                        val out = output ?: java.io.ByteArrayOutputStream().also { output = it }
+                        out.write(buf, copied, field.start - copied)
+                        out.write(buf, field.start, field.tagEnd - field.start)
+                        writeWireLength(out, replacement.size)
+                        out.write(replacement)
+                        copied = field.end
+                    }
+                }
+            }
+        }
+        return output?.also { it.write(buf, copied, end - copied) }?.toByteArray()
+    }
+
+    private data class WireField(
+        val number: Int, val wire: Int, val start: Int, val tagEnd: Int,
+        val valueStart: Int, val end: Int, val value: Long,
+    )
+
+    private inline fun scanWire(buf: ByteArray, start: Int, end: Int, visit: (WireField) -> Unit) {
+        var pos = start
+        while (pos < end) {
+            val fieldStart = pos
+            val tag = readStrictVarint(buf, pos, end)
+            pos = tag.pos
+            val number = tag.value ushr 3
+            if (number == 0L || number > 0x1fffffffL) throw IllegalArgumentException("invalid tag")
+            val wire = (tag.value and 7).toInt()
+            val tagEnd = pos
+            var value = 0L
+            val valueStart: Int
+            when (wire) {
+                0 -> {
+                    valueStart = pos
+                    val item = readStrictVarint(buf, pos, end)
+                    value = item.value
+                    pos = item.pos
+                }
+                1, 5 -> {
+                    valueStart = pos
+                    val size = if (wire == 1) 8 else 4
+                    if (end - pos < size) throw IllegalArgumentException("truncated fixed field")
+                    pos += size
+                }
+                2 -> {
+                    val length = readStrictVarint(buf, pos, end)
+                    pos = length.pos
+                    if (length.value < 0 || length.value > end - pos) throw IllegalArgumentException("invalid length")
+                    valueStart = pos
+                    pos += length.value.toInt()
+                }
+                else -> throw IllegalArgumentException("unsupported wire type")
+            }
+            visit(WireField(number.toInt(), wire, fieldStart, tagEnd, valueStart, pos, value))
+        }
+    }
+
+    private fun readStrictVarint(buf: ByteArray, start: Int, end: Int): Varint {
+        var value = 0L
+        for (index in 0..9) {
+            val pos = start + index
+            if (pos >= end) throw IllegalArgumentException("truncated varint")
+            val byte = buf[pos].toInt() and 0xff
+            if (index == 9 && byte > 1) throw IllegalArgumentException("varint overflow")
+            value = value or ((byte and 0x7f).toLong() shl (index * 7))
+            if (byte and 0x80 == 0) return Varint(value, pos + 1)
+        }
+        throw IllegalArgumentException("varint overflow")
+    }
+
+    private fun writeWireLength(out: java.io.ByteArrayOutputStream, length: Int) {
+        var value = length
+        while (value >= 128) {
+            out.write((value and 127) or 128)
+            value = value ushr 7
+        }
+        out.write(value)
+    }
+
+    private fun inspectSyncMessage(buf: ByteArray, start: Int, end: Int): RecallPush? {
+        var type: Long? = null
+        var subtype: Long? = null
+        var contentStart = -1
+        var contentEnd = -1
+        scanWire(buf, start, end) { field ->
+            if (field.number == 2 && field.wire == 2) {
+                scanWire(buf, field.valueStart, field.end) { head ->
+                    if (head.wire == 0 && head.number == 1) type = head.value
+                    if (head.wire == 0 && head.number == 2) subtype = head.value
+                }
+            } else if (field.number == 3 && field.wire == 2) {
+                scanWire(buf, field.valueStart, field.end) { body ->
+                    if (body.number == 2 && body.wire == 2) {
+                        contentStart = body.valueStart
+                        contentEnd = body.end
+                    }
+                }
+            }
+        }
+        if (type != 732L || subtype != 17L || contentStart < 0 || contentEnd - contentStart <= GROUP_CONTENT_PREFIX) return null
+        var op: Long? = null
+        var group: Long? = null
+        var operator: String? = null
+        val seqs = LinkedHashSet<Long>()
+        scanWire(buf, contentStart + GROUP_CONTENT_PREFIX, contentEnd) { field ->
+            if (field.wire == 0 && field.number == 1) op = field.value
+            if (field.wire == 0 && field.number == 4) group = field.value
+            if (field.wire == 2 && field.number == 11) {
+                scanWire(buf, field.valueStart, field.end) { info ->
+                    if (info.number == 1 && info.wire == 2) {
+                        operator = String(buf, info.valueStart, info.end - info.valueStart, Charsets.UTF_8)
+                    } else if (info.number == 3 && info.wire == 2) {
+                        var seq: Long? = null
+                        scanWire(buf, info.valueStart, info.end) { entry ->
+                            if (entry.number == 1 && entry.wire == 0) seq = entry.value
+                        }
+                        seq?.takeIf { it > 0 }?.let { seqs.add(it) }
+                    }
+                }
+            }
+        }
+        val uid = operator?.takeIf { NtMsgAccess.isUid(it) } ?: return null
+        val groupCode = group?.takeIf { it > 0 } ?: return null
+        if (op != GROUP_OP_TYPE_RECALL) return null
+        // Hash the canonical MsgPush field 1 tag and length followed by Message bytes.
+        val messageSize = end - start
+        var hash = 31 + 10
+        var length = messageSize
+        var lengthSize = 1
+        while (length >= 128) {
+            hash = 31 * hash + ((length and 127) or 128).toByte().toInt()
+            length = length ushr 7
+            lengthSize++
+        }
+        hash = 31 * hash + length.toByte().toInt()
+        for (i in start until end) hash = 31 * hash + buf[i]
+        return RecallPush(Kind.GROUP, NtMsgAccess.CHAT_TYPE_GROUP, uid, listOf(groupCode.toString()),
+            "${1L + lengthSize + messageSize}:$hash", seqs.toList())
+    }
 
     private const val GROUP_CONTENT_PREFIX = 7
     private const val GROUP_OP_TYPE_RECALL = 7L

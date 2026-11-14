@@ -16,21 +16,22 @@ import java.util.Collections
  * Keeps messages that the other side revoked, for both C2C and group chats.
  *
  * Two entry points, both read-only towards existing messages:
- *  - `IQQNTWrapperSession$CppProxy.onMsfPush`: drops the single recall push
- *    (ContentHead 528/138 for C2C, 732/17 for group) before the kernel applies it.
+ *  - `IQQNTWrapperSession$CppProxy.onMsfPush`: drops a single online recall push
+ *    and removes peer group recall entries from InfoSyncPush without dropping
+ *    ordinary messages, own recalls or synchronization state in the same batch.
  *  - `MessageFacadeImpl.handleRevokedNotifyAndNotify`: the legacy notify path.
  *
  * Nothing rewrites a MsgRecord or its elements. Earlier builds did that and every
  * one of them crashed when a chat containing a revoked message was opened, so the
  * "已撤回" hint is delivered as a separate local gray tip instead.
  *
- * Self revokes are let through: either the operator uid equals the current account,
- * or a local `recallMsg` call happened moments ago.
+ * Self revokes are let through. Online pushes also retain the short local-recall
+ * guard; offline entries use their explicit operator, not an unrelated recent action.
  */
 object AntiRevokeHooker : BaseHooker() {
     override val key = "anti_revoke"
     override val name = "消息防撤回"
-    override val description = "私聊和群聊都保留对方撤回的消息，并提示已撤回。自己撤回的不受影响。"
+    override val description = "保留本机已收到的对方撤回消息；未收到正文时明确提示。支持私聊和群聊，自己撤回不受影响。"
     override val defaultEnabled = false
 
     private const val LOCAL_RECALL_WINDOW_MS = 15_000L
@@ -72,8 +73,21 @@ object AntiRevokeHooker : BaseHooker() {
     private fun skipPeerRecallPush(call: MethodCall) {
         if (!enabled()) return
         val cmd = call.args.getOrNull(0) as? String ?: return
+        if (cmd != RevokePushParser.CMD_MSG_PUSH && cmd != RevokePushParser.CMD_INFO_SYNC_PUSH) return
         val proto = call.args.getOrNull(1) as? ByteArray ?: return
         val selfUid = NtMsgAccess.selfUid()
+        if (cmd == RevokePushParser.CMD_INFO_SYNC_PUSH) {
+            val filtered = RevokePushParser.filterInfoSync(proto, selfUid) ?: return
+            // Keep the sync envelope and cursors flowing through the kernel. Only
+            // the confirmed peer recall messages inside this batch are removed.
+            call.args[1] = filtered.payload
+            val accountUin = runCatching { NtMsgAccess.selfUin() }.getOrDefault("")
+            filtered.recalls.forEach { push ->
+                RevokeTip.show(accountUin, push.chatType, push.peerCandidates, push.operatorUid, push.fingerprint, push.messageSeqs)
+            }
+            Log.info("anti-revoke filtered ${filtered.recalls.size} offline group recall(s), sync preserved")
+            return
+        }
         val push = RevokePushParser.inspect(cmd, proto, selfUid) ?: return
         if (selfUid.isNotEmpty() && push.operatorUid == selfUid) return
         if (recentLocalRecall()) {

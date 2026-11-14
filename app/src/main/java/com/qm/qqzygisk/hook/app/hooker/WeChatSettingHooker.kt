@@ -19,9 +19,10 @@ import java.util.WeakHashMap
 /**
  * 微信 setting_new 页面；在宿主排好序后插入，避免破坏前驱链。
  *
- * 同时保留两套已确证的分发协议，按 builder 签名与 itemBase 形态整体校验，不按短名猜：
- * - 8.0.79 (code 3182): ib4.i + cc4.g.d(ib4.i, List) -> la6.l，点击 f8，Activity 取 getActivity()/getContext()
- * - 另一已支持分发变体: la4.i + fb4.g.d(la4.i, List)，点击 g8，Activity 取 getMvvmActivity()
+ * 保留已确证的分发协议，按 builder 签名与 itemBase 形态整体校验，不按短名猜：
+ * - 8.0.79 (code 3182): ib4.i + cc4.g.d(ib4.i, List) -> la6.l
+ * - 另一已支持分发变体: la4.i + fb4.g.d(la4.i, List)
+ * - 8.0.80 (code 3220): na4.i + hb4.g.d(na4.i, List) -> pa6.l
  * 任一必需 getter 或完整形状缺失时明确放弃安装，绝不把同名无关类当成设置构建器。
  */
 internal object WeChatSettingHooker {
@@ -36,6 +37,14 @@ internal object WeChatSettingHooker {
         val builderResult: String?,
         val click: String,
         val activityGetters: List<String>,
+        val title: String,
+        val key: String,
+        val summary: String,
+        val summaryResource: String,
+        val icon: String,
+        val ordering: String,
+        val drawable: String? = null,
+        val visible: String? = null,
     )
 
     private class Binding(
@@ -52,6 +61,8 @@ internal object WeChatSettingHooker {
             builderResult = "la6.l",
             click = "f8",
             activityGetters = listOf("getActivity", "getContext"),
+            title = "R7", key = "P7", summary = "U7", summaryResource = "b8",
+            icon = "N7", ordering = "Q7",
         ),
         Protocol(
             itemBase = "la4.i",
@@ -59,6 +70,17 @@ internal object WeChatSettingHooker {
             builderResult = null,
             click = "g8",
             activityGetters = listOf("getMvvmActivity", "getActivity", "getContext"),
+            title = "R7", key = "P7", summary = "U7", summaryResource = "b8",
+            icon = "N7", ordering = "Q7",
+        ),
+        Protocol(
+            itemBase = "na4.i",
+            builder = "hb4.g",
+            builderResult = "pa6.l",
+            click = "g8",
+            activityGetters = listOf("getContext", "getActivity"),
+            title = "S7", key = "Q7", summary = "c8", summaryResource = "e8",
+            icon = "O7", ordering = "R7", drawable = "Y7", visible = "f8",
         ),
     )
 
@@ -172,8 +194,9 @@ internal object WeChatSettingHooker {
         ) {
             error("${itemBase.name} 缺少 Activity getter $primaryGetter")
         }
-        // R7/P7/U7/b8/N7 是宿主渲染时使用的 getter；Q7 属于宿主排序协议，必须存在但本入口不改写。
-        listOf("R7", "P7", "U7", "b8", "N7", "Q7").forEach { name ->
+        // 排序 getter 必须存在，但本入口在宿主排序之后插入，不改写它。
+        listOfNotNull(protocol.title, protocol.key, protocol.summary, protocol.summaryResource,
+            protocol.icon, protocol.ordering, protocol.drawable, protocol.visible).forEach { name ->
             findMethod(itemBase, name, emptyArray()) ?: error("${itemBase.name} 缺少 $name")
         }
         findMethod(itemBase, protocol.click, clickParams)
@@ -197,7 +220,8 @@ internal object WeChatSettingHooker {
         ) {
             return false
         }
-        val gettersUsable = listOf("R7", "P7", "U7", "b8", "N7").all { name ->
+        val gettersUsable = listOfNotNull(protocol.title, protocol.key, protocol.summary,
+            protocol.summaryResource, protocol.icon, protocol.drawable, protocol.visible).all { name ->
             val method = findMethod(candidate, name, emptyArray()) ?: return@all false
             !Modifier.isStatic(method.modifiers) &&
                 !Modifier.isAbstract(method.modifiers) &&
@@ -271,14 +295,15 @@ internal object WeChatSettingHooker {
                 }
             }
         }
-        // R7 才是标题；P7 是列表/埋点 key，U7/b8 是副标题，N7 是提示资源。
-        override("R7", ITEM_TITLE)
-        override("P7", ITEM_KEY)
-        override("U7", "")
-        override("b8", null)
-        override("N7", null)
-        // Q7 无需改写：已知调用点只有 cc4.f/cc4.g 对宿主 uiComponents 排序，
-        // 本入口在排序后插入，不会进入 Q7 的 parent/front 链，也不影响其它实例。
+        val protocol = binding.protocol
+        override(protocol.title, ITEM_TITLE)
+        override(protocol.key, ITEM_KEY)
+        override(protocol.summary, "")
+        override(protocol.summaryResource, null)
+        override(protocol.icon, null)
+        protocol.drawable?.let { override(it, null) }
+        protocol.visible?.let { override(it, true) }
+        // 本入口在排序后插入，不进入宿主的 parent/front 链，也不影响其它实例。
         val click = findMethod(binding.template, binding.protocol.click, clickParams)
             ?: error("微信设置项缺少点击方法 ${binding.protocol.click}")
         if (installedItemMethods.add(click)) {

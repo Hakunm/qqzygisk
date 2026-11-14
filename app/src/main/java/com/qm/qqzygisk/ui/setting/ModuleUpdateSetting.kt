@@ -325,7 +325,8 @@ internal fun ModuleUpdateSetting() {
     }
     val starting = downloadBusy || pendingRelease != null
     val inlineDownloadVisible = !dialogVisible && (
-        (activeDownload != null && visibleProgress?.status != ModuleDownloadStatus.Complete) ||
+        (activeDownload != null && visibleProgress?.status != ModuleDownloadStatus.Complete &&
+            visibleProgress?.status != ModuleDownloadStatus.Missing) ||
             starting || downloadError != null || progressReadFailed
         )
 
@@ -362,7 +363,7 @@ internal fun ModuleUpdateSetting() {
         }
     }
 
-    // 关闭弹窗后只保留未完成任务与错误；已完成下载的打开入口仅在更新弹窗内显示。
+    // 完成或文件已缺失的旧任务不常驻设置页；主动操作的错误仍保留。
     if (inlineDownloadVisible) {
         ModuleDownloadControls(
             release = updateRelease,

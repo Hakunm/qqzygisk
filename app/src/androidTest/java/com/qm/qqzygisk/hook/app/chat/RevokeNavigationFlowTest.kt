@@ -59,22 +59,93 @@ class RevokeNavigationFlowTest {
     }
 
     private fun assertNavigation(recall: RevokePushParser.RecallPush, sequence: Long) {
-        val root = JSONObject(RevokeTip.grayTipJson(recall.chatType, null, sequence))
+        val root = JSONObject(RevokeTip.grayTipJson(recall.chatType, null, sequence, RevokeMessageLookup.Status.PRESENT))
         val items = root.getJSONArray("items")
         val links = (0 until items.length()).map { items.getJSONObject(it) }.filter { it.optString("type") == "url" }
         assertEquals(1, links.size)
         val link = links.single()
         assertEquals(93, link.getInt("local_jp"))
         assertEquals(sequence, link.getJSONObject("param").getLong("msgseq"))
-        assertEquals("这条消息", link.getString("txt"))
         assertFalse("Must not turn local navigation into a network/scheme action", link.has("jp"))
-        assertEquals("center", root.getString("align"))
     }
 
     private fun assertPlainTip(chatType: Int, sequence: Long?) {
-        val items = JSONObject(RevokeTip.grayTipJson(chatType, null, sequence)).getJSONArray("items")
+        val items = JSONObject(RevokeTip.grayTipJson(chatType, null, sequence, RevokeMessageLookup.Status.UNKNOWN)).getJSONArray("items")
         assertFalse((0 until items.length()).any { items.getJSONObject(it).optString("type") == "url" })
-        assertTrue((0 until items.length()).joinToString("") { items.getJSONObject(it).optString("txt") }.contains("已保留"))
+    }
+
+    interface Callback {
+        fun onResult(code: Int, message: String, records: ArrayList<Record>)
+    }
+
+    class Contact
+    class Element(val elementType: Int)
+    class Record(val chatType: Int, val peerUid: String, val msgSeq: Long, val elements: ArrayList<Element>)
+    class Service(private val responses: Map<Long, Pair<Int, ArrayList<Record>>?>) {
+        fun getSingleMsg(contact: Contact, seq: Long, callback: Callback) {
+            responses[seq]?.let { (code, records) -> callback.onResult(code, "", records) }
+        }
+    }
+
+    @Test
+    fun lookupAndAcceptedTipsOnlyMarkRealMessagesForBothChatTypes() {
+        for ((chatType, peer) in listOf(NtMsgAccess.CHAT_TYPE_C2C to "u_peer_account", NtMsgAccess.CHAT_TYPE_GROUP to "123456789")) {
+            val account = "12345"
+            fun record(seq: Long, type: Int) = Record(chatType, peer, seq, arrayListOf(Element(type)))
+            val service = Service(mapOf(
+                1L to (0 to arrayListOf(record(1, 1))),
+                2L to (0 to arrayListOf()),
+                3L to (0 to arrayListOf(record(3, 8))),
+                4L to (1 to arrayListOf(record(4, 1))),
+                5L to null,
+                6L to (0 to arrayListOf(record(99, 1))),
+                7L to (0 to arrayListOf(record(7, 1))),
+            ))
+            val marks = mutableListOf<Long>()
+            val statuses = mutableMapOf<Long, RevokeMessageLookup.Status>()
+            val pending = (1L..7L).map { "$it" to it as Long? }
+            assertTrue(RevokeTip.processCandidate(pending, { true }, { seq ->
+                RevokeMessageLookup.lookup(service, Contact(), RecalledMessageKey(account, chatType, peer, seq!!), 1)
+            }, { _, seq, status ->
+                statuses[seq!!] = status
+                val json = JSONObject(RevokeTip.grayTipJson(chatType, null, seq, status))
+                val items = json.getJSONArray("items")
+                val links = (0 until items.length()).map { items.getJSONObject(it) }.filter { it.optString("type") == "url" }
+                assertEquals(if (status == RevokeMessageLookup.Status.PRESENT) 1 else 0, links.size)
+                if (links.isNotEmpty()) assertEquals(seq, links.single().getJSONObject("param").getLong("msgseq"))
+                val text = (0 until items.length()).joinToString("") { items.getJSONObject(it).optString("txt") }
+                assertEquals(status == RevokeMessageLookup.Status.PRESENT, text.contains("已保留"))
+                assertEquals(status == RevokeMessageLookup.Status.PRESENT, RevokeTip.recentAbstract(chatType, status).contains("已保留"))
+                if (seq == 7L) RevokeTip.Outcome.UNCONFIRMED else RevokeTip.Outcome.ACCEPTED
+            }, { marks.add(it) }))
+            assertEquals(listOf(1L), marks)
+            assertEquals(RevokeMessageLookup.Status.MISSING, statuses[2L])
+            assertEquals(RevokeMessageLookup.Status.MISSING, statuses[3L])
+            assertEquals(RevokeMessageLookup.Status.UNKNOWN, statuses[4L])
+            assertEquals(RevokeMessageLookup.Status.UNKNOWN, statuses[5L])
+            assertEquals(RevokeMessageLookup.Status.MISSING, statuses[6L])
+            assertEquals(RevokeMessageLookup.Status.PRESENT, statuses[7L])
+        }
+    }
+
+    @Test
+    fun accountSwitchAndUnconfirmedTipDoNotCreateRetainedMarks() {
+        val marked = mutableListOf<Long>()
+        var current = true
+        var inserted = false
+        val pending = listOf("one" to 1L as Long?)
+        assertFalse(RevokeTip.processCandidate(pending, { current }, {
+            current = false
+            RevokeMessageLookup.Status.PRESENT
+        }, { _, _, _ ->
+            inserted = true
+            RevokeTip.Outcome.ACCEPTED
+        }, { marked.add(it) }))
+        assertFalse(inserted)
+        assertTrue(marked.isEmpty())
+        assertTrue(RevokeTip.processCandidate(pending, { true }, { RevokeMessageLookup.Status.PRESENT },
+            { _, _, _ -> RevokeTip.Outcome.UNCONFIRMED }, { marked.add(it) }))
+        assertTrue(marked.isEmpty())
     }
 
     private fun push(type: Long, subtype: Long, content: ByteArray): ByteArray =

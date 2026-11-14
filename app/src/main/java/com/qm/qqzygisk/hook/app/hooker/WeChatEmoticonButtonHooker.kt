@@ -8,7 +8,7 @@ import com.qm.qqzygisk.hook.utils.Log
 import java.lang.reflect.Method
 import java.lang.reflect.Modifier
 
-/** 微信 8.0.79/3182 首次初始化按钮时尚无描述，直接绑定宿主 ChatFooter 的表情按钮。 */
+/** 微信 8.0.79/3182、8.0.80/3220 在初始化时直接绑定 ChatFooter 的表情按钮。 */
 internal object WeChatEmoticonButtonHooker {
     private val installed = mutableSetOf<Method>()
     private var failureLogged = false

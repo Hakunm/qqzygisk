@@ -30,9 +30,15 @@ internal object RevokeTip {
     private const val MSG_WORD = "一条消息"
     private const val KEPT_SUFFIX = "（已保留）"
 
-    /** recentAbstract for the conversation list; unchanged by the navigation link. */
-    private const val TIP_C2C = WITHDREW_C2C + MSG_WORD + KEPT_SUFFIX
-    private const val TIP_GROUP = WITHDREW_GROUP + MSG_WORD + KEPT_SUFFIX
+    private fun suffix(status: RevokeMessageLookup.Status): String =
+        when (status) {
+            RevokeMessageLookup.Status.PRESENT -> KEPT_SUFFIX
+            RevokeMessageLookup.Status.MISSING -> "（本机未找到原消息）"
+            RevokeMessageLookup.Status.UNKNOWN -> "（未确认原消息）"
+        }
+
+    internal fun recentAbstract(chatType: Int, status: RevokeMessageLookup.Status): String =
+        (if (chatType == NtMsgAccess.CHAT_TYPE_GROUP) WITHDREW_GROUP else WITHDREW_C2C) + MSG_WORD + suffix(status)
 
     /** CommonMsgNavActionHandler: local_jp 93 navigates by msgseq inside the open chat. */
     private const val NAV_LOCAL_JP = 93
@@ -66,10 +72,9 @@ internal object RevokeTip {
      * [accountUin] is the logged in account read when the revoke push arrived: the
      * retained mark must never land under an account the worker switched to later.
      *
-     * [messageSeqs] holds the seqs of the revoked messages in the push: each one gets
-     * its own tip with a jump link, deduplicated by fingerprint plus seq. An empty
-     * list, or only non-positive values, keeps the plain tip so a missing seq can
-     * never render a broken link.
+     * [messageSeqs] holds the seqs of the revoked messages in the push: each gets
+     * its own deduplicated tip. Only confirmed ordinary messages receive links and
+     * retained marks. An empty list produces an unconfirmed plain tip.
      *
      * Everything runs on the [worker]: the uid→uin mapping once, then the host's
      * per-group display name for each peer candidate before its tips are built. A
@@ -100,6 +105,7 @@ internal object RevokeTip {
         val pending = tips.filter { (key, _) -> seen.add(key) }
         if (pending.isEmpty()) return
         worker.execute {
+            if (!sameAccount(accountUin)) return@execute
             // uid→uin is chat-independent and resolved once; display names differ per
             // group, so they are resolved inside each peer attempt, once for the whole
             // seq batch. A null uin keeps the generic "有成员撤回了" tip.
@@ -114,48 +120,27 @@ internal object RevokeTip {
                     operatorIds?.let { (uid, uin) ->
                         Operator(uid, uin, NtMsgAccess.groupMemberDisplayName(peer, uin) ?: uin)
                     }
-                val prepared = pending.map { (key, seq) -> key to grayTipJson(chatType, operator, seq) }
-                var resolved = false
-                var marked = false
-                for ((key, json) in prepared) {
-                    val outcome =
-                        runCatching { addGrayTip(chatType, peer, json) }
+                val resolved = processCandidate(
+                    pending,
+                    { sameAccount(accountUin) },
+                    { seq -> RevokeMessageLookup.lookup(accountUin, chatType, peer, seq) },
+                    { key, seq, status ->
+                        val json = grayTipJson(chatType, operator, seq, status)
+                        runCatching { addGrayTip(chatType, peer, json, status) }
                             .onFailure { Log.warn("anti-revoke gray tip failed peer=$peer key=$key", it) }
                             .getOrDefault(Outcome.FAILED)
-                    if (outcome != Outcome.FAILED) {
-                        // UNCONFIRMED proves nothing about the candidate, so only a
-                        // confirmed ACCEPTED mark is persisted; the existing "never
-                        // retry another peer" behaviour stays as it was.
-                        if (outcome == Outcome.ACCEPTED && !marked) {
-                            // Confirmed conversation: mark the whole valid seq batch
-                            // under this peer. Recording must not wait for the
-                            // remaining tips of the same peer to be sent.
-                            marked = true
-                            record(accountUin, chatType, peer, seqs)
-                        }
-                        resolved = true
-                        Log.info("anti-revoke gray tip $outcome chat=$chatType peer=$peer key=$key")
-                    } else if (!resolved) {
-                        // This candidate is not the conversation; the remaining tips
-                        // must not land here, so try the next peer.
-                        break
-                    } else {
-                        Log.warn("anti-revoke gray tip rejected chat=$chatType peer=$peer key=$key")
-                    }
-                }
-                // UNCONFIRMED is not retried on another peer, preserving the original
-                // no-duplicate-tip behaviour; it does not authorize a retained mark.
-                if (resolved) return@execute
+                    },
+                    { seq -> record(accountUin, chatType, peer, listOf(seq)) },
+                )
+                if (!sameAccount(accountUin) || resolved) return@execute
             }
             Log.warn("anti-revoke gray tip found no valid peer in $peers")
         }
     }
 
     /**
-     * Persists the retained marks for exactly [peerUid]. Only called after the kernel
-     * confirmed an ACCEPTED tip for this candidate; a storage problem is logged and
-     * swallowed so the original anti-revoke behaviour and the gray tip are never
-     * affected.
+     * Persists a retained mark for exactly [peerUid] and the independently confirmed
+     * message whose tip was accepted. A storage problem must not affect the tip.
      */
     private fun record(
         accountUin: String,
@@ -176,7 +161,36 @@ internal object RevokeTip {
         }
     }
 
-    private enum class Outcome { ACCEPTED, UNCONFIRMED, FAILED }
+    internal enum class Outcome { ACCEPTED, UNCONFIRMED, FAILED }
+
+    private fun sameAccount(account: String): Boolean =
+        account.isNotEmpty() && runCatching { NtMsgAccess.selfUin() == account }.getOrDefault(false)
+
+    internal fun processCandidate(
+        pending: List<Pair<String, Long?>>,
+        sameAccount: () -> Boolean,
+        lookup: (Long?) -> RevokeMessageLookup.Status,
+        insert: (String, Long?, RevokeMessageLookup.Status) -> Outcome,
+        mark: (Long) -> Unit,
+    ): Boolean {
+        var resolved = false
+        for ((key, seq) in pending) {
+            if (!sameAccount()) return resolved
+            val status = lookup(seq)
+            if (!sameAccount()) return resolved
+            val outcome = insert(key, seq, status)
+            if (!sameAccount()) return resolved
+            if (outcome != Outcome.FAILED) {
+                resolved = true
+                if (outcome == Outcome.ACCEPTED && status == RevokeMessageLookup.Status.PRESENT && seq != null && seq > 0) {
+                    mark(seq)
+                }
+            } else if (!resolved) {
+                break
+            }
+        }
+        return resolved
+    }
 
     /**
      * The operator identity a group tip renders. [name] is resolved by the host for
@@ -202,10 +216,11 @@ internal object RevokeTip {
         chatType: Int,
         peerUid: String,
         json: String,
+        status: RevokeMessageLookup.Status,
     ): Outcome {
         val service = NtMsgAccess.kernelMsgService() ?: error("IKernelMsgService missing")
         val contact = NtMsgAccess.createContact(chatType, peerUid) ?: error("Contact missing")
-        val element = newJsonGrayElement(chatType, json) ?: error("JsonGrayElement missing")
+        val element = newJsonGrayElement(chatType, json, status) ?: error("JsonGrayElement missing")
         val method =
             findAddGrayTip(service.javaClass, contact.javaClass, element.javaClass)
                 ?: error("addLocalJsonGrayTipMsg missing")
@@ -263,9 +278,10 @@ internal object RevokeTip {
     private fun newJsonGrayElement(
         chatType: Int,
         json: String,
+        status: RevokeMessageLookup.Status,
     ): Any? {
         val type = NtMsgAccess.loadFirst(*NtMsgAccess.jsonGrayElements) ?: return null
-        val summary = if (chatType == NtMsgAccess.CHAT_TYPE_GROUP) TIP_GROUP else TIP_C2C
+        val summary = recentAbstract(chatType, status)
         val busiId = if (chatType == NtMsgAccess.CHAT_TYPE_GROUP) BUSI_GROUP else BUSI_C2C
         return type.declaredConstructors
             .sortedByDescending { it.parameterCount }
@@ -315,17 +331,17 @@ internal object RevokeTip {
      * [operator] is the identity resolved on the tip worker: the item shows its
      * per-group [Operator.name] and keeps the uid/uin pair for the profile jump.
      *
-     * A positive [messageSeq] splits the sentence around a `local_jp` 93 URL item that
-     * the native handler turns into a jump to that message in the open chat. The
-     * operator UserItem stays a profile link, the message link is its own item.
+     * A confirmed positive [messageSeq] becomes a `local_jp` 93 navigation item.
+     * Other states have no message link. The operator UserItem remains a profile link.
      */
     internal fun grayTipJson(
         chatType: Int,
         operator: Operator?,
         messageSeq: Long?,
+        status: RevokeMessageLookup.Status,
     ): String {
         val group = chatType == NtMsgAccess.CHAT_TYPE_GROUP
-        val seq = messageSeq?.takeIf { it > 0 }
+        val seq = messageSeq?.takeIf { it > 0 && status == RevokeMessageLookup.Status.PRESENT }
         val operatorItem = operator?.takeIf { group }?.let { userItem(it) }
         val prefix =
             when {
@@ -336,11 +352,11 @@ internal object RevokeTip {
         val items = JSONArray()
         if (operatorItem != null) items.put(operatorItem)
         if (seq == null) {
-            items.put(textItem(prefix + MSG_WORD + KEPT_SUFFIX))
+            items.put(textItem(prefix + MSG_WORD + suffix(if (status == RevokeMessageLookup.Status.PRESENT) RevokeMessageLookup.Status.UNKNOWN else status)))
         } else {
             items.put(textItem(prefix))
             items.put(seqItem(seq))
-            items.put(textItem(KEPT_SUFFIX))
+            items.put(textItem(suffix(status)))
         }
         return JSONObject().put("align", "center").put("items", items).toString()
     }
