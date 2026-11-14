@@ -66,6 +66,12 @@ internal object HookSettings {
         }
     }
 
+    /** 调用方须先初始化设置并持有监听器；用于已显示界面的开关即时刷新。 */
+    fun registerChangeListener(listener: SharedPreferences.OnSharedPreferenceChangeListener) {
+        checkNotNull(preferences) { "Hook settings are not initialized" }
+            .registerOnSharedPreferenceChangeListener(listener)
+    }
+
     fun isEnabled(key: String, defaultValue: Boolean = false): Boolean {
         defaults.putIfAbsent(key, defaultValue)
         values[key]?.let { return it }

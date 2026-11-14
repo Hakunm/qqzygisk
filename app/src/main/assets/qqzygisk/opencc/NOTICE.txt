@@ -1,0 +1,10 @@
+OpenCC dictionary data, version ver.1.4.2
+Source: https://github.com/BYVoid/OpenCC/releases/tag/ver.1.4.2
+
+TSCharacters.txt, TSPhrases.txt and CJK_Compatibility_Ideographs.txt are copied unchanged from the OpenCC ver.1.4.2 source release.
+Source archive SHA-256: 164c19dc25217c1da98a13384f0ace5fb9fc570e7c2703072ffb715ecbace3e5
+
+The dictionary data is distributed under the Apache License 2.0.
+See LICENSE.txt and AUTHORS.txt in this directory.
+
+QQ Zygisk uses the preferred mappings in these base dictionaries for display conversion. It does not include the generated TSCharactersExt mappings that may require uncommon glyphs.

@@ -10,6 +10,7 @@ import com.qm.qqzygisk.hook.app.chat.NtImageRkeyProvider
 import com.qm.qqzygisk.hook.app.hooker.AntiRevokeHooker
 import com.qm.qqzygisk.hook.app.hooker.BiliMiniAppWebCardHooker
 import com.qm.qqzygisk.hook.app.hooker.ChatMenuHooker
+import com.qm.qqzygisk.hook.app.hooker.ChineseSimplifyHooker
 import com.qm.qqzygisk.hook.app.hooker.DisableReplyAtHooker
 import com.qm.qqzygisk.hook.app.hooker.EmoticonButtonHooker
 import com.qm.qqzygisk.hook.app.hooker.EmoticonPanelHooker
@@ -108,6 +109,7 @@ object QQEntry {
                 SystemCameraHooker,
                 SettingHooker,
                 MsgFontHooker,
+                ChineseSimplifyHooker,
                 AntiRevokeHooker,
             )
         hooks.forEach { hooker ->
@@ -116,7 +118,7 @@ object QQEntry {
                 settings.addAll(hooker.extraSettings)
             }
             if (hooker !== QQPatchBlockHooker && hooker !== BiliMiniAppWebCardHooker &&
-                hooker !== DisableReplyAtHooker && hooker !in hostUiHookers
+                hooker !== DisableReplyAtHooker && hooker !== ChineseSimplifyHooker && hooker !in hostUiHookers
             ) hooker.load()
         }
         StartActivityHooker.decorators.forEach { hooker ->
@@ -154,6 +156,8 @@ object QQEntry {
         BiliMiniAppWebCardHooker.load()
         // 引用自动 @ 独立安装，协议漂移不影响其它宿主 UI hook。
         DisableReplyAtHooker.load()
+        // 正文转换只在宿主 UI ClassLoader 就绪后安装，失败不阻断其他功能。
+        ChineseSimplifyHooker.load()
     }
 
     /**

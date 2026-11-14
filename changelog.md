@@ -1,10 +1,22 @@
-# qqhook（未发布）
+# qqhook v1.30
 
-模块更新的下载状态和操作统一收回更新弹窗。
+QQ 新增聊天正文繁体转简体；模块更新的下载状态和操作统一收回更新弹窗。
+
+## 新增
+
+- QQ 新增“聊天消息繁体转简体”开关，默认关闭；离线转换本机显示，保留链接、@、表情和原有字体，不修改原消息或发送内容，关闭后无需重启即可恢复原文。
 
 ## 修复
 
 - 移除“检查更新”下方的整个下载区域，不再常驻显示下载失败、连接中断、文件缺失、进度或重试按钮；关闭更新弹窗不会取消后台下载。
+
+## 下载
+
+| 平台 | 安装包 | 架构 |
+| --- | --- | --- |
+| Android 9 及以上（Zygisk 模块） | [qqhook.zip](https://github.com/Night-stars-1/qqzygisk/releases/download/v1.30/qqhook.zip) | arm64-v8a、armeabi-v7a |
+
+[完整变更：v1.29...v1.30](https://github.com/Night-stars-1/qqzygisk/compare/v1.29...v1.30)
 
 # qqhook v1.29
 
