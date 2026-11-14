@@ -47,7 +47,6 @@ import androidx.lifecycle.LifecycleOwner
 import com.qm.qqzygisk.BuildConfig
 import com.qm.qqzygisk.hook.utils.ModuleDownload
 import com.qm.qqzygisk.hook.utils.ModuleDownloadProgress
-import com.qm.qqzygisk.hook.utils.ModuleDownloadStatus
 import com.qm.qqzygisk.hook.utils.ModuleDownloads
 import com.qm.qqzygisk.hook.utils.ModuleRelease
 import com.qm.qqzygisk.hook.utils.ModuleUpdates
@@ -68,7 +67,7 @@ import kotlinx.coroutines.withContext
  * 右侧显示真实百分比（总量未知时显示“—”），下载完成后只提供“打开 ZIP”，
  * 不会自动安装。失败的下载只显示错误与重新下载。
  *
- * ZIP 由宿主进程流式下载：关闭弹窗只隐藏界面，不取消下载；只有“取消下载”才删除任务。
+ * ZIP 由宿主进程流式下载：关闭弹窗隐藏全部下载状态、错误和操作，不取消下载；只有“取消下载”才删除任务。
  * 宿主被强停后，重新打开设置会恢复未完成任务。下载完成后保存到公共“下载”目录，
  * “打开 ZIP”仅在当前更新弹窗内提供，且仍需完整文件已成功发布。
  */
@@ -324,11 +323,6 @@ internal fun ModuleUpdateSetting() {
         activeDownload != null && it.download.id == activeDownload.id
     }
     val starting = downloadBusy || pendingRelease != null
-    val inlineDownloadVisible = !dialogVisible && (
-        (activeDownload != null && visibleProgress?.status != ModuleDownloadStatus.Complete &&
-            visibleProgress?.status != ModuleDownloadStatus.Missing) ||
-            starting || downloadError != null || progressReadFailed
-        )
 
     Row(
         modifier = Modifier
@@ -361,24 +355,6 @@ internal fun ModuleUpdateSetting() {
                 Text(text = "检查更新")
             }
         }
-    }
-
-    // 完成或文件已缺失的旧任务不常驻设置页；主动操作的错误仍保留。
-    if (inlineDownloadVisible) {
-        ModuleDownloadControls(
-            release = updateRelease,
-            download = activeDownload,
-            progress = visibleProgress,
-            starting = starting,
-            readFailed = progressReadFailed,
-            error = downloadError,
-            onDownload = { updateRelease?.let { requestDownload(it) } },
-            onCancel = { cancelDownload() },
-            onRetryRead = { retryReadProgress() },
-            onOpenZip = null,
-            onClose = null,
-            modifier = Modifier.padding(bottom = 16.dp),
-        )
     }
 
     if (dialogVisible) {
