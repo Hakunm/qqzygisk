@@ -48,6 +48,15 @@ internal object NtMsgAccess {
             "com.tencent.qqnt.kernel.nativeinterface.IQQNTWrapperSession\$CppProxy",
             "com.tencent.qqnt.kernelpublic.nativeinterface.IQQNTWrapperSession\$CppProxy",
         )
+    val msgRespHandlers =
+        arrayOf(
+            "mqq.app.msghandle.MsgRespHandler",
+        )
+    val knownMsfDispatcherClasses =
+        arrayOf(
+            "mqq.app.msghandle.MSFRespHandleTask",
+            "mqq.app.msghandle.MsfRespHandleUtil",
+        )
     val messageFacades =
         arrayOf(
             "com.tencent.mobileqq.msg.api.impl.MessageFacadeImpl",
@@ -65,11 +74,17 @@ internal object NtMsgAccess {
             "com.tencent.qqnt.kernelpublic.nativeinterface.JsonGrayElement",
         )
 
-    private val methodCache = ConcurrentHashMap<String, Method?>()
-    private val fieldCache = ConcurrentHashMap<String, Field?>()
+    private class MethodHolder(val method: Method?)
+    private class FieldHolder(val field: Field?)
 
+    /** 按 `Class` 身份缓存，避免切换 ClassLoader 后复用旧副本；使用非空 holder 避免 `ConcurrentHashMap` 写入 null 抛 NPE。 */
+    private val noArgMethodCache = ConcurrentHashMap<String, MethodHolder>()
+    private val singleArgMethodCache = ConcurrentHashMap<String, MethodHolder>()
+    private val fieldCache = ConcurrentHashMap<String, FieldHolder>()
+
+    /** 绑定当前账号 uin 的 uid 缓存，切号后 uin 变化自动失效，不再永久停留在旧账号。 */
     @Volatile
-    private var cachedSelfUid: String? = null
+    private var cachedSelfIdentity: Pair<String, String>? = null
 
     @Volatile
     private var troopMemberWarned = false
@@ -188,21 +203,25 @@ internal object NtMsgAccess {
 
     /** The `u_xxx` uid of the logged in account, needed to tell self revokes apart. */
     fun selfUid(): String {
-        cachedSelfUid?.let { return it }
-        val runtime = currentRuntime()
+        val uin = runCatching { selfUin() }.getOrDefault("")
+        if (uin.isNotEmpty()) {
+            cachedSelfIdentity?.takeIf { it.first == uin }?.let { return it.second }
+        }
+        val runtime = runCatching { currentRuntime() }.getOrNull()
         val direct =
             runtime?.let {
                 listOf("getCurrentUid", "getCurrentAccountUid", "getSelfUid")
                     .firstNotNullOfOrNull { name -> asString(invokeNoArg(it, name)) }
             }
         if (isUid(direct)) {
-            return direct!!.also { cachedSelfUid = it }
+            if (uin.isNotEmpty()) cachedSelfIdentity = uin to direct!!
+            return direct!!
         }
-        val uin = selfUin()
         if (uin.isNotEmpty()) {
-            val converted = uidFromUin(uin)
+            val converted = runCatching { uidFromUin(uin) }.getOrNull()
             if (isUid(converted)) {
-                return converted!!.also { cachedSelfUid = it }
+                cachedSelfIdentity = uin to converted!!
+                return converted!!
             }
         }
         return ""
@@ -349,9 +368,18 @@ internal object NtMsgAccess {
         target: Any,
         name: String,
     ): Any? {
-        val method = findMethod(target.javaClass, name) { it.parameterTypes.isEmpty() } ?: return null
-        method.isAccessible = true
+        val method = findNoArgMethod(target.javaClass, name) ?: return null
         return runCatching { method.invoke(target) }.getOrNull()
+    }
+
+    fun invokeSingleArg(
+        target: Any,
+        name: String,
+        paramType: Class<*>,
+        arg: Any?,
+    ): Boolean {
+        val method = findSingleArgMethod(target.javaClass, name, paramType) ?: return false
+        return runCatching { method.invoke(target, arg) }.isSuccess
     }
 
     fun read(
@@ -394,33 +422,56 @@ internal object NtMsgAccess {
         return runCatching { field.get(target) }.getOrNull()
     }
 
-    private fun findField(
+    private fun typeIdentityKey(type: Class<*>, suffix: String): String =
+        "${System.identityHashCode(type)}:${type.name}#$suffix"
+
+    internal fun findField(
         type: Class<*>,
         name: String,
     ): Field? {
-        val key = "${type.name}#$name"
-        if (fieldCache.containsKey(key)) return fieldCache[key]
-        val field =
-            generateSequence(type) { it.superclass }
-                .flatMap { it.declaredFields.asSequence() }
-                .firstOrNull { it.name == name }
-                ?.apply { isAccessible = true }
-        fieldCache[key] = field
-        return field
+        val key = typeIdentityKey(type, name)
+        return fieldCache.computeIfAbsent(key) {
+            val field =
+                generateSequence(type) { it.superclass }
+                    .flatMap { it.declaredFields.asSequence() }
+                    .firstOrNull { it.name == name }
+                    ?.apply { isAccessible = true }
+            FieldHolder(field)
+        }.field
     }
 
-    private fun findMethod(
+    internal fun findNoArgMethod(
         type: Class<*>,
         name: String,
-        predicate: (Method) -> Boolean,
     ): Method? {
-        val key = "${type.name}#$name#${predicate.hashCode()}"
-        if (methodCache.containsKey(key)) return methodCache[key]
-        val method =
-            generateSequence(type) { it.superclass }
-                .flatMap { it.declaredMethods.asSequence() }
-                .firstOrNull { it.name == name && predicate(it) }
-        methodCache[key] = method
-        return method
+        val key = typeIdentityKey(type, name)
+        return noArgMethodCache.computeIfAbsent(key) {
+            val method =
+                generateSequence(type) { it.superclass }
+                    .flatMap { it.declaredMethods.asSequence() }
+                    .firstOrNull { it.name == name && it.parameterTypes.isEmpty() }
+                    ?.apply { isAccessible = true }
+            MethodHolder(method)
+        }.method
+    }
+
+    private fun findSingleArgMethod(
+        type: Class<*>,
+        name: String,
+        paramType: Class<*>,
+    ): Method? {
+        val key = typeIdentityKey(type, "$name(${paramType.name})")
+        return singleArgMethodCache.computeIfAbsent(key) {
+            val method =
+                generateSequence(type) { it.superclass }
+                    .flatMap { it.declaredMethods.asSequence() }
+                    .firstOrNull {
+                        it.name == name &&
+                            it.parameterTypes.size == 1 &&
+                            it.parameterTypes[0].isAssignableFrom(paramType)
+                    }
+                    ?.apply { isAccessible = true }
+            MethodHolder(method)
+        }.method
     }
 }

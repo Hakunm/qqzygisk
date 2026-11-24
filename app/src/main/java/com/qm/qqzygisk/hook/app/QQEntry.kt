@@ -53,6 +53,9 @@ object QQEntry {
     /** 宿主 ClassLoader 对比日志只输出一次 */
     private val hostClassLoaderLogged = AtomicBoolean(false)
 
+    /** 防止 LoadedApk.createOrUpdateClassLoaderLocked 多次回调重复清空设置与重复挂钩 */
+    private val initialized = AtomicBoolean(false)
+
     /** 宿主的 LoadedApk 包名（与 `Context.packageName` 同源），热补丁拦截在 Application 构造前用它过滤宿主 Context */
     internal var hostPackageName: String = ""
         private set
@@ -61,6 +64,11 @@ object QQEntry {
         loader: ClassLoader,
         packageName: String,
     ) {
+        if (!initialized.compareAndSet(false, true)) {
+            HostData.alignHostClassLoader(loader)
+            AntiRevokeHooker.retry()
+            return
+        }
         settings.clear()
         hostPackageName = packageName
         HostData.init(loader)
@@ -83,12 +91,19 @@ object QQEntry {
             }
 
         onAppLifecycle {
-            attachBaseContext { baseContext, _ ->
+            attachBaseContext { baseContext, hasCalledSuper ->
                 HookSettings.initialize(baseContext)
-                Log.info("hook settings: ${HookSettings.dump(settings)}")
+                if (!hasCalledSuper) {
+                    Log.info("hook settings: ${HookSettings.dump(settings)}")
+                } else {
+                    alignHostClassLoader(baseContext.classLoader, "attachBaseContext")
+                    AntiRevokeHooker.onHostContextReady(baseContext)
+                }
             }
             onCreate {
                 registerModuleAppActivities(proxy = generalSettingActivityClass)
+                alignHostClassLoader(classLoader ?: javaClass.classLoader, "Application.onCreate")
+                AntiRevokeHooker.onHostContextReady(this)
             }
             beforeActivityCreate { activity ->
                 onHostActivityLifecycle(activity)
@@ -144,6 +159,10 @@ object QQEntry {
     private fun onHostActivityLifecycle(activity: Activity) {
         if (!isHostActivity(activity)) return
         HookSettings.initialize(activity)
+        // 先于一次性 UI 安装闸门完成 ClassLoader 对齐与防撤回补齐：即使 UI hook 进入失败终态或后续
+        // Activity 发生 ClassLoader 切换，防撤回仍能对齐并补齐安装。
+        alignHostClassLoader(activity.javaClass.classLoader, "Activity")
+        AntiRevokeHooker.onHostContextReady(activity)
         try {
             hostHookInstallGate.install { installHostHooks(activity) }
         } catch (th: Throwable) {
@@ -163,14 +182,11 @@ object QQEntry {
     /**
      * 安装依赖宿主资源的 hook。
      *
-     * 会话级 hook（防撤回）不依赖宿主 UI，只依赖宿主会话代理，放在宿主就绪时机安装一次。
-     *
      * @return 是否全部安装成功
      */
     private fun installHostHooks(activity: Activity): Boolean {
-        alignHostClassLoader(activity)
+        alignHostClassLoader(activity.javaClass.classLoader, "installHostHooks")
         val start = SystemClock.elapsedRealtime()
-        AntiRevokeHooker.retry()
         val chatMenu = ChatMenuHooker.load()
         val repeater = RepeaterHooker.load()
         val setting = HostRuntime.current.installSettingsEntry(activity)
@@ -190,25 +206,28 @@ object QQEntry {
     }
 
     /**
-     * 把宿主类解析用的 ClassLoader 对齐到真实宿主 Activity 的 ClassLoader。
+     * 把宿主类解析用的 ClassLoader 对齐到真实运行宿主代码的 ClassLoader。
      *
      * 宿主（RFix/qfix）可能在模块初始化（早期 LoadedApk 时机）之后才替换真正加载宿主类的
      * ClassLoader，模块初始化时拿到的 ClassLoader 不一定是线上 QQ 实际使用的那个。
-     * 这里在宿主 Activity 生命周期入口对比并（必要时）对齐，之后宿主类扫描/hook 都使用
-     * 同一个来源，避免 hook 到过期的宿主类副本。扫描缓存按 ClassLoader 标识重建，无需手动失效。
+     * 在 Application 与 Activity 生命周期入口均执行对比并（必要时）对齐，确保后台冷启动和前台页面
+     * 都使用同一来源，避免 hook 到过期的宿主类副本。扫描缓存按 ClassLoader 标识重建，无需手动失效。
      */
-    private fun alignHostClassLoader(activity: Activity) {
+    private fun alignHostClassLoader(
+        hostLoader: ClassLoader?,
+        stage: String,
+    ) {
+        if (hostLoader == null) return
         val moduleLoader = HostData.appClassLoader
-        val hostLoader = activity.javaClass.classLoader ?: return
         if (hostClassLoaderLogged.compareAndSet(false, true)) {
             Log.info(
-                "宿主 ClassLoader 对比: module=${moduleLoader.javaClass.name}@${System.identityHashCode(moduleLoader)} " +
+                "宿主 ClassLoader 对比($stage): module=${moduleLoader.javaClass.name}@${System.identityHashCode(moduleLoader)} " +
                     "host=${hostLoader.javaClass.name}@${System.identityHashCode(hostLoader)} same=${moduleLoader === hostLoader}",
             )
         }
         if (moduleLoader !== hostLoader) {
             HostData.init(hostLoader)
-            Log.warn("宿主 ClassLoader 与模块初始化时不同, 已对齐为宿主 Activity 的 ClassLoader: ${hostLoader.javaClass.name}")
+            Log.warn("宿主 ClassLoader 与模块初始化时不同($stage), 已对齐为: ${hostLoader.javaClass.name}")
         }
     }
 

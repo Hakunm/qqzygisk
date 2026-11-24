@@ -76,7 +76,7 @@ internal object RecalledBadgeHooker {
     private val grayItemMissingLogged = AtomicBoolean(false)
 
     @Volatile
-    private var installed = false
+    private var installedLoader: ClassLoader? = null
 
     @Volatile
     private var msgGetter: Method? = null
@@ -113,14 +113,15 @@ internal object RecalledBadgeHooker {
      */
     fun install(context: Context): Boolean {
         startStore(context)
-        if (installed) return true
+        val targetLoader = appClassLoader
+        if (installedLoader === targetLoader) return true
         synchronized(lock) {
-            if (installed) return true
+            if (installedLoader === targetLoader) return true
             val ok = runCatching { installHook() }.getOrElse { error ->
                 drift("安装已撤回边框 hook 失败", error)
                 false
             }
-            installed = ok
+            if (ok) installedLoader = targetLoader
             return ok
         }
     }

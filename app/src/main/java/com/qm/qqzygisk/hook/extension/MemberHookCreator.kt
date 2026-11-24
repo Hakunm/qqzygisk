@@ -106,6 +106,7 @@ class MemberHookCreator {
             myHook,
             EntryPointType.DIRECT
         )
+        HookDeoptimizer.markHooked(target)
     }
 
     private fun xpBuild() {
@@ -134,5 +135,6 @@ class MemberHookCreator {
             target,
             hook
         )
+        HookDeoptimizer.markHooked(target)
     }
 }

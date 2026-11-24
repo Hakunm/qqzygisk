@@ -229,6 +229,9 @@ internal object AppParasitics {
     /** [Application.attach] 回调是否已记录过日志 */
     private val attachCallbackLogged = java.util.concurrent.atomic.AtomicBoolean(false)
 
+    /** 全局框架生命周期 hook 只安装一次，避免 LoadedApk 二次更新导致重复挂钩。 */
+    private val lifecycleRegistered = java.util.concurrent.atomic.AtomicBoolean(false)
+
     /** 已注入模块资源的 Resources 实例 */
     private val injectedResources = java.util.Collections.newSetFromMap(java.util.WeakHashMap<Resources, Boolean>())
 
@@ -286,6 +289,7 @@ internal object AppParasitics {
      */
     internal fun registerToAppLifecycle(packageName: String) {
         if (appLifecycleActors.isEmpty()) return
+        if (!lifecycleRegistered.compareAndSet(false, true)) return
 
         /** Hook [Application] 装载方法 */
         runCatching {

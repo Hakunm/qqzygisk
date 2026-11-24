@@ -50,6 +50,8 @@ internal object RevokeTip {
 
     private const val SEEN_LIMIT = 256
     private const val RESULT_TIMEOUT_MS = 2_000L
+    private const val KERNEL_SERVICE_RETRY_ATTEMPTS = 3
+    private const val KERNEL_SERVICE_RETRY_DELAY_MS = 400L
 
     private val worker =
         Executors.newSingleThreadExecutor { runnable ->
@@ -105,7 +107,12 @@ internal object RevokeTip {
         val pending = tips.filter { (key, _) -> seen.add(key) }
         if (pending.isEmpty()) return
         worker.execute {
-            if (!sameAccount(accountUin)) return@execute
+            val resolvedAccount = awaitReadyAccountAndService(accountUin)
+            if (resolvedAccount == null) {
+                evictSeen(pending)
+                Log.warn("anti-revoke gray tip skipped: account or IKernelMsgService unavailable for peers=$peers")
+                return@execute
+            }
             // uid→uin is chat-independent and resolved once; display names differ per
             // group, so they are resolved inside each peer attempt, once for the whole
             // seq batch. A null uin keeps the generic "有成员撤回了" tip.
@@ -122,20 +129,48 @@ internal object RevokeTip {
                     }
                 val resolved = processCandidate(
                     pending,
-                    { sameAccount(accountUin) },
-                    { seq -> RevokeMessageLookup.lookup(accountUin, chatType, peer, seq) },
+                    { sameAccount(resolvedAccount) },
+                    { seq -> RevokeMessageLookup.lookup(resolvedAccount, chatType, peer, seq) },
                     { key, seq, status ->
                         val json = grayTipJson(chatType, operator, seq, status)
                         runCatching { addGrayTip(chatType, peer, json, status) }
                             .onFailure { Log.warn("anti-revoke gray tip failed peer=$peer key=$key", it) }
                             .getOrDefault(Outcome.FAILED)
                     },
-                    { seq -> record(accountUin, chatType, peer, listOf(seq)) },
+                    { seq -> record(resolvedAccount, chatType, peer, listOf(seq)) },
                 )
-                if (!sameAccount(accountUin) || resolved) return@execute
+                if (!sameAccount(resolvedAccount) || resolved) return@execute
             }
+            evictSeen(pending)
             Log.warn("anti-revoke gray tip found no valid peer in $peers")
         }
+    }
+
+    private fun evictSeen(pending: List<Pair<String, Long?>>) {
+        pending.forEach { (key, _) -> seen.remove(key) }
+    }
+
+    /**
+     * 冷启动首包同步到达时账号 uin 或 NT 内核服务可能晚几百毫秒就绪，短暂退避等待避免丢失灰条提示。
+     *
+     * 若调用方已捕获明确的 [capturedAccount]，始终严格校验未切号；仅在首包到达时捕获为空串才在等待窗口内现场解析。
+     */
+    private fun awaitReadyAccountAndService(capturedAccount: String): String? {
+        for (attempt in 0 until KERNEL_SERVICE_RETRY_ATTEMPTS) {
+            val currentUin = runCatching { NtMsgAccess.selfUin() }.getOrDefault("")
+            val account =
+                if (capturedAccount.isNotEmpty()) {
+                    if (currentUin != capturedAccount) return null
+                    capturedAccount
+                } else {
+                    currentUin
+                }
+            if (account.isNotEmpty() && NtMsgAccess.kernelMsgService() != null) return account
+            if (attempt + 1 < KERNEL_SERVICE_RETRY_ATTEMPTS) {
+                runCatching { Thread.sleep(KERNEL_SERVICE_RETRY_DELAY_MS) }
+            }
+        }
+        return null
     }
 
     /**
@@ -150,7 +185,7 @@ internal object RevokeTip {
     ) {
         if (messageSeqs.isEmpty()) return
         try {
-            val context = AppParasitics.currentApplication
+            val context = AppParasitics.appContext
             if (context == null) {
                 Log.warn("已撤回标记未记录: 宿主 Context 不可用 peer=$peerUid")
                 return
@@ -296,9 +331,9 @@ internal object RevokeTip {
     ): Any? {
         ctor.isAccessible = true
         var stringSlot = 0
-        val args =
+        val args: Array<Any?> =
             ctor.parameterTypes
-                .map { param ->
+                .map<Class<*>, Any?> { param ->
                     when (param) {
                         Long::class.javaPrimitiveType, java.lang.Long::class.java -> {
                             busiId
